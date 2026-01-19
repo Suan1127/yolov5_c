@@ -1,0 +1,44 @@
+# Build directories
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.dll
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+
+# Data and weights
+data/*.bin
+data/*.json
+weights/*.pt
+weights/*.bin
+
+# Test outputs
+tests/output/
+*.log
+build/ 
+*.vcxproj 
+*.vcxproj.filters 
+*.sln 
+CMakeCache.txt 
+CMakeFiles/ 
+*.obj 
+*.exe 
+*.lib 
+"third_party/yolov5/" 
