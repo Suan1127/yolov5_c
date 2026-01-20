@@ -22,6 +22,7 @@ static int32_t get_actual_repeats(int32_t base_repeats, float depth_multiple) {
 }
 
 // Helper: Load Conv+BN layer weights
+// Returns: -1 on error, 0 if not fused, 1 if fused
 int load_conv_bn_layer(conv2d_layer_t* conv, batchnorm2d_layer_t* bn,
                        weights_loader_t* loader, const char* prefix,
                        int32_t in_channels, int32_t out_channels,
@@ -43,12 +44,19 @@ int load_conv_bn_layer(conv2d_layer_t* conv, batchnorm2d_layer_t* bn,
     };
     if (conv2d_init(conv, in_channels, &conv_params) != 0) return -1;
     
-    // Load conv weights
+    // Load conv weights (fused weight if model was fused)
     snprintf(name, sizeof(name), "%s.conv.weight", prefix);
     float* w = weights_loader_get(loader, name, shape, &num_dims);
-    if (w) {
-        conv2d_load_weights(conv, w, NULL);
+    if (!w) {
+        fprintf(stderr, "Error: Failed to load weight for %s\n", name);
+        return -1;
     }
+    // Try to load fused bias (if Conv+BN was fused, conv will have bias)
+    float* fused_bias = NULL;
+    snprintf(name, sizeof(name), "%s.conv.bias", prefix);
+    fused_bias = weights_loader_get(loader, name, shape, &num_dims);
+    
+    conv2d_load_weights(conv, w, fused_bias);
     
     // Initialize BN layer
     batchnorm2d_params_t bn_params = {
@@ -61,7 +69,7 @@ int load_conv_bn_layer(conv2d_layer_t* conv, batchnorm2d_layer_t* bn,
         return -1;
     }
     
-    // Load BN weights
+    // Load BN weights (only if not fused - check if BN weights exist)
     snprintf(name, sizeof(name), "%s.bn.weight", prefix);
     float* bn_w = weights_loader_get(loader, name, shape, &num_dims);
     snprintf(name, sizeof(name), "%s.bn.bias", prefix);
@@ -71,8 +79,28 @@ int load_conv_bn_layer(conv2d_layer_t* conv, batchnorm2d_layer_t* bn,
     snprintf(name, sizeof(name), "%s.bn.running_var", prefix);
     float* bn_var = weights_loader_get(loader, name, shape, &num_dims);
     
-    if (bn_w && bn_b && bn_mean && bn_var) {
+    // If fused_bias was loaded, Conv+BN is fused - set BN to identity (no-op)
+    // Otherwise, load BN weights normally
+    // Note: We need to return fused status to caller, but since this is a helper function,
+    // we'll store it in a way that can be checked later. For now, we'll use a flag in the struct.
+    // Actually, we can't modify the struct here. Let's return the fused status.
+    // But the function signature doesn't allow that. Let's use a different approach:
+    // Store fused status in a way that can be checked. Actually, we can check if bias exists.
+    
+    if (fused_bias) {
+        // Model is fused - BN is already incorporated into Conv weight/bias
+        // Set BN to identity: weight=1, bias=0, mean=0, var=1
+        for (int i = 0; i < out_channels; i++) {
+            bn->weight[i] = 1.0f;
+            bn->bias[i] = 0.0f;
+            bn->running_mean[i] = 0.0f;
+            bn->running_var[i] = 1.0f;
+        }
+        return 1;  // Return 1 to indicate fused (we'll need to modify return type)
+    } else if (bn_w && bn_b && bn_mean && bn_var) {
+        // Not fused - load BN weights normally
         batchnorm2d_load_weights(bn, bn_w, bn_b, bn_mean, bn_var);
+        return 0;  // Return 0 to indicate not fused
     }
     
     return 0;
@@ -177,15 +205,17 @@ int yolov5s_load_weights(yolov5s_model_t* model) {
     model->backbone_convs[0].stride = 2;
     model->backbone_convs[0].padding = 2;
     snprintf(name, sizeof(name), "model.0");
-    if (load_conv_bn_layer(&model->backbone_convs[0].conv, &model->backbone_convs[0].bn,
+    int fused_status = load_conv_bn_layer(&model->backbone_convs[0].conv, &model->backbone_convs[0].bn,
                           model->weights, name,
                           model->backbone_convs[0].in_channels,
                           model->backbone_convs[0].out_channels,
                           model->backbone_convs[0].kernel_size,
                           model->backbone_convs[0].stride,
-                          model->backbone_convs[0].padding) != 0) {
+                          model->backbone_convs[0].padding);
+    if (fused_status < 0) {
         return -1;
     }
+    model->backbone_convs[0].is_fused = (fused_status > 0) ? 1 : 0;
     
     // Layer 1: Conv(32→64, 3×3, s=2)
     model->backbone_convs[1].in_channels = 32;
@@ -194,15 +224,17 @@ int yolov5s_load_weights(yolov5s_model_t* model) {
     model->backbone_convs[1].stride = 2;
     model->backbone_convs[1].padding = 1;
     snprintf(name, sizeof(name), "model.1");
-    if (load_conv_bn_layer(&model->backbone_convs[1].conv, &model->backbone_convs[1].bn,
+    fused_status = load_conv_bn_layer(&model->backbone_convs[1].conv, &model->backbone_convs[1].bn,
                           model->weights, name,
                           model->backbone_convs[1].in_channels,
                           model->backbone_convs[1].out_channels,
                           model->backbone_convs[1].kernel_size,
                           model->backbone_convs[1].stride,
-                          model->backbone_convs[1].padding) != 0) {
+                          model->backbone_convs[1].padding);
+    if (fused_status < 0) {
         return -1;
     }
+    model->backbone_convs[1].is_fused = (fused_status > 0) ? 1 : 0;
     
     // Layer 2: C3(64→64, n=1)
     model->backbone_c3s[0].c1 = 64;
@@ -223,15 +255,17 @@ int yolov5s_load_weights(yolov5s_model_t* model) {
     model->backbone_convs[2].stride = 2;
     model->backbone_convs[2].padding = 1;
     snprintf(name, sizeof(name), "model.3");
-    if (load_conv_bn_layer(&model->backbone_convs[2].conv, &model->backbone_convs[2].bn,
+    fused_status = load_conv_bn_layer(&model->backbone_convs[2].conv, &model->backbone_convs[2].bn,
                           model->weights, name,
                           model->backbone_convs[2].in_channels,
                           model->backbone_convs[2].out_channels,
                           model->backbone_convs[2].kernel_size,
                           model->backbone_convs[2].stride,
-                          model->backbone_convs[2].padding) != 0) {
+                          model->backbone_convs[2].padding);
+    if (fused_status < 0) {
         return -1;
     }
+    model->backbone_convs[2].is_fused = (fused_status > 0) ? 1 : 0;
     
     // Layer 4: C3(128→128, n=2)
     model->backbone_c3s[1].c1 = 128;
@@ -252,15 +286,17 @@ int yolov5s_load_weights(yolov5s_model_t* model) {
     model->backbone_convs[3].stride = 2;
     model->backbone_convs[3].padding = 1;
     snprintf(name, sizeof(name), "model.5");
-    if (load_conv_bn_layer(&model->backbone_convs[3].conv, &model->backbone_convs[3].bn,
+    fused_status = load_conv_bn_layer(&model->backbone_convs[3].conv, &model->backbone_convs[3].bn,
                           model->weights, name,
                           model->backbone_convs[3].in_channels,
                           model->backbone_convs[3].out_channels,
                           model->backbone_convs[3].kernel_size,
                           model->backbone_convs[3].stride,
-                          model->backbone_convs[3].padding) != 0) {
+                          model->backbone_convs[3].padding);
+    if (fused_status < 0) {
         return -1;
     }
+    model->backbone_convs[3].is_fused = (fused_status > 0) ? 1 : 0;
     
     // Layer 6: C3(256→256, n=3)
     model->backbone_c3s[2].c1 = 256;
@@ -281,15 +317,17 @@ int yolov5s_load_weights(yolov5s_model_t* model) {
     model->backbone_convs[4].stride = 2;
     model->backbone_convs[4].padding = 1;
     snprintf(name, sizeof(name), "model.7");
-    if (load_conv_bn_layer(&model->backbone_convs[4].conv, &model->backbone_convs[4].bn,
+    fused_status = load_conv_bn_layer(&model->backbone_convs[4].conv, &model->backbone_convs[4].bn,
                           model->weights, name,
                           model->backbone_convs[4].in_channels,
                           model->backbone_convs[4].out_channels,
                           model->backbone_convs[4].kernel_size,
                           model->backbone_convs[4].stride,
-                          model->backbone_convs[4].padding) != 0) {
+                          model->backbone_convs[4].padding);
+    if (fused_status < 0) {
         return -1;
     }
+    model->backbone_convs[4].is_fused = (fused_status > 0) ? 1 : 0;
     
     // Layer 8: C3(512→512, n=1)
     model->backbone_c3s[3].c1 = 512;
@@ -317,13 +355,15 @@ int yolov5s_load_weights(yolov5s_model_t* model) {
     model->head_convs[0].in_channels = 512;
     model->head_convs[0].out_channels = 256;
     snprintf(name, sizeof(name), "model.10");
-    if (load_conv_bn_layer(&model->head_convs[0].conv, &model->head_convs[0].bn,
+    fused_status = load_conv_bn_layer(&model->head_convs[0].conv, &model->head_convs[0].bn,
                           model->weights, name,
                           model->head_convs[0].in_channels,
                           model->head_convs[0].out_channels,
-                          1, 1, 0) != 0) {
+                          1, 1, 0);
+    if (fused_status < 0) {
         return -1;
     }
+    model->head_convs[0].is_fused = (fused_status > 0) ? 1 : 0;
     
     // Layer 13: C3(512→256, n=1, shortcut=False)
     model->head_c3s[0].c1 = 512;  // From concat of layer 11 (256) and layer 6 (256)
@@ -341,13 +381,15 @@ int yolov5s_load_weights(yolov5s_model_t* model) {
     model->head_convs[1].in_channels = 256;
     model->head_convs[1].out_channels = 128;
     snprintf(name, sizeof(name), "model.14");
-    if (load_conv_bn_layer(&model->head_convs[1].conv, &model->head_convs[1].bn,
+    fused_status = load_conv_bn_layer(&model->head_convs[1].conv, &model->head_convs[1].bn,
                           model->weights, name,
                           model->head_convs[1].in_channels,
                           model->head_convs[1].out_channels,
-                          1, 1, 0) != 0) {
+                          1, 1, 0);
+    if (fused_status < 0) {
         return -1;
     }
+    model->head_convs[1].is_fused = (fused_status > 0) ? 1 : 0;
     
     // Layer 17: C3(256→128, n=1, shortcut=False)
     model->head_c3s[1].c1 = 256;  // From concat of layer 15 (128) and layer 4 (128)
@@ -365,16 +407,19 @@ int yolov5s_load_weights(yolov5s_model_t* model) {
     model->head_convs[2].in_channels = 128;
     model->head_convs[2].out_channels = 128;
     snprintf(name, sizeof(name), "model.18");
-    if (load_conv_bn_layer(&model->head_convs[2].conv, &model->head_convs[2].bn,
+    fused_status = load_conv_bn_layer(&model->head_convs[2].conv, &model->head_convs[2].bn,
                           model->weights, name,
                           model->head_convs[2].in_channels,
                           model->head_convs[2].out_channels,
-                          3, 2, 1) != 0) {
+                          3, 2, 1);
+    if (fused_status < 0) {
         return -1;
     }
+    model->head_convs[2].is_fused = (fused_status > 0) ? 1 : 0;
     
     // Layer 20: C3(256→256, n=1, shortcut=False)
-    model->head_c3s[2].c1 = 256;  // From concat of layer 18 (128) and layer 13 (256)
+    // Input is from concat of layer 18 (128) and layer 14 (128) = 256 channels
+    model->head_c3s[2].c1 = 256;  // From concat of layer 18 (128) and layer 14 (128) = 256
     model->head_c3s[2].c2 = 256;
     model->head_c3s[2].n = get_actual_repeats(3, depth_multiple);  // 1
     model->head_c3s[2].shortcut = 0;
@@ -389,13 +434,15 @@ int yolov5s_load_weights(yolov5s_model_t* model) {
     model->head_convs[3].in_channels = 256;
     model->head_convs[3].out_channels = 256;
     snprintf(name, sizeof(name), "model.21");
-    if (load_conv_bn_layer(&model->head_convs[3].conv, &model->head_convs[3].bn,
+    fused_status = load_conv_bn_layer(&model->head_convs[3].conv, &model->head_convs[3].bn,
                           model->weights, name,
                           model->head_convs[3].in_channels,
                           model->head_convs[3].out_channels,
-                          3, 2, 1) != 0) {
+                          3, 2, 1);
+    if (fused_status < 0) {
         return -1;
     }
+    model->head_convs[3].is_fused = (fused_status > 0) ? 1 : 0;
     
     // Layer 23: C3(512→512, n=1, shortcut=False)
     model->head_c3s[3].c1 = 512;  // From concat of layer 21 (256) and layer 10 (256)

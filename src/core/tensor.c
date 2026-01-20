@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <errno.h>
 
 tensor_t* tensor_create(int32_t n, int32_t c, int32_t h, int32_t w) {
     tensor_t* t = (tensor_t*)malloc(sizeof(tensor_t));
@@ -73,7 +74,16 @@ int tensor_dump(const tensor_t* t, const char* filename) {
     if (!t || !filename) return -1;
     
     FILE* fp = fopen(filename, "wb");
-    if (!fp) return -1;
+    if (!fp) {
+        fprintf(stderr, "Error: tensor_dump: Failed to open file '%s'", filename);
+        #ifdef _WIN32
+        fprintf(stderr, " (errno: %d)", errno);
+        #else
+        fprintf(stderr, ": %s", strerror(errno));
+        #endif
+        fprintf(stderr, "\n");
+        return -1;
+    }
     
     // Write header: n, c, h, w (as int32_t)
     int32_t dims[4] = {t->n, t->c, t->h, t->w};

@@ -36,8 +36,8 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
     Run inference and dump intermediate layer outputs
     """
     if save_layers is None:
-        # Save layers: [0, 1, 2, 3, 4, 5, 6, 7, 9, 17, 20, 23]
-        save_layers = [0, 1, 2, 3, 4, 5, 6, 7, 9, 17, 20, 23]
+        # Save all layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+        save_layers = list(range(24))  # Layers 0-23 (layer 24 is Detect, skip it)
     
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -116,15 +116,42 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
         return hook
     
     # Register hooks for save layers
-    # Note: This is a simplified approach. For accurate layer matching,
-    # you may need to traverse the model structure more carefully
+    # YOLOv5 model structure: model.model is a Sequential container
+    # We can directly access layers by index: model.model[i]
     if hasattr(model, 'model'):
         # YOLOv5 model structure
         model_modules = model.model if hasattr(model, 'model') else model
-        if hasattr(model_modules, 'named_modules'):
+        
+        # Debug: Print model structure
+        print(f"\nModel structure info:")
+        print(f"  Type: {type(model_modules)}")
+        if hasattr(model_modules, '__len__'):
+            print(f"  Length: {len(model_modules)}")
+        
+        # Try to access layers by index (for Sequential models)
+        if hasattr(model_modules, '__len__') and hasattr(model_modules, '__getitem__'):
+            # Direct index access (e.g., model.model[0], model.model[1], ...)
+            print(f"\nRegistering hooks using direct index access...")
+            for layer_idx in save_layers:
+                try:
+                    if layer_idx < len(model_modules):
+                        module = model_modules[layer_idx]
+                        # Check module type for debugging
+                        module_type = type(module).__name__
+                        handle = module.register_forward_hook(make_hook(layer_idx))
+                        handles.append(handle)
+                        print(f"  ✓ Registered hook for layer {layer_idx} (model.model[{layer_idx}], type={module_type})")
+                    else:
+                        print(f"  ✗ Layer {layer_idx} out of range (model length: {len(model_modules)})")
+                except (IndexError, AttributeError, TypeError) as e:
+                    print(f"  ✗ Could not register hook for layer {layer_idx}: {e}")
+        
+        # Fallback: named_modules approach (if direct indexing doesn't work or didn't register all)
+        if len(handles) < len(save_layers) and hasattr(model_modules, 'named_modules'):
+            print(f"\nRegistering hooks using named_modules (fallback)...")
+            registered_indices = set()
             for name, module in model_modules.named_modules():
-                # Try to match layer indices
-                # This is approximate - may need adjustment based on actual model structure
+                # Try to match layer indices from module name
                 try:
                     # Extract layer number from name (e.g., "model.3" -> 3)
                     if '.' in name:
@@ -132,12 +159,14 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
                         for part in parts:
                             if part.isdigit():
                                 layer_idx = int(part)
-                                if layer_idx in save_layers:
+                                if layer_idx in save_layers and layer_idx not in registered_indices:
+                                    module_type = type(module).__name__
                                     handle = module.register_forward_hook(make_hook(layer_idx))
                                     handles.append(handle)
-                                    print(f"  Registered hook for layer {layer_idx} ({name})")
+                                    registered_indices.add(layer_idx)
+                                    print(f"  ✓ Registered hook for layer {layer_idx} ({name}, type={module_type})")
                                     break
-                except:
+                except Exception as e:
                     pass
     
     # Run forward pass
@@ -209,8 +238,8 @@ def main():
                         help='Path to input tensor .bin file or image name (e.g., "bus")')
     parser.add_argument('--output', type=str, default='testdata/python', 
                         help='Output directory (default: testdata/python)')
-    parser.add_argument('--layers', type=int, nargs='+', default=[0, 1, 2, 3, 4, 5, 6, 7, 9, 17, 20, 23],
-                        help='Layer indices to save (default: 0 1 2 3 4 5 6 7 9 17 20 23)')
+    parser.add_argument('--layers', type=int, nargs='+', default=None,
+                        help='Layer indices to save (default: all layers 0-23)')
     
     args = parser.parse_args()
     

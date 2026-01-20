@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 int conv2d_init(conv2d_layer_t* layer, int32_t in_channels, const conv2d_params_t* params) {
     if (!layer || !params) return -1;
@@ -70,7 +71,31 @@ int conv2d_forward(const conv2d_layer_t* layer, const tensor_t* input, tensor_t*
     // Note: Caller should ensure output tensor is properly allocated
     if (output->n != input->n || output->c != layer->params.out_channels ||
         output->h != out_h || output->w != out_w) {
+        fprintf(stderr, "Error: conv2d_forward: Output tensor size mismatch\n");
+        fprintf(stderr, "  Expected: (%d, %d, %d, %d), Got: (%d, %d, %d, %d)\n",
+                input->n, layer->params.out_channels, out_h, out_w,
+                output->n, output->c, output->h, output->w);
         return -1;  // Output tensor size mismatch
+    }
+    
+    // Check input channels match
+    if (input->c != layer->in_channels) {
+        fprintf(stderr, "Error: conv2d_forward: Input channel mismatch\n");
+        fprintf(stderr, "  Expected: %d, Got: %d\n", layer->in_channels, input->c);
+        return -1;  // Input channel mismatch
+    }
+    
+    // Check if input and output point to the same memory
+    // This is a critical error - input and output should not share memory
+    // If they do, we cannot perform convolution correctly
+    if (input->data == output->data) {
+        fprintf(stderr, "ERROR: conv2d_forward: input and output share the same memory!\n");
+        fprintf(stderr, "  input->data=%p, output->data=%p\n", (void*)input->data, (void*)output->data);
+        fprintf(stderr, "  input: (%d, %d, %d, %d), output: (%d, %d, %d, %d)\n",
+                input->n, input->c, input->h, input->w,
+                output->n, output->c, output->h, output->w);
+        fprintf(stderr, "  This is a critical error. Caller must provide separate buffers.\n");
+        return -1;  // Fail instead of proceeding with corrupted data
     }
     
     tensor_zero(output);
@@ -82,16 +107,27 @@ int conv2d_forward(const conv2d_layer_t* layer, const tensor_t* input, tensor_t*
     // 1x1 convolution (optimized path)
     if (k == 1 && s == 1 && p == 0) {
         // output[b, oc, h, w] = sum(ic) input[b, ic, h, w] * weight[oc, ic, 0, 0]
+        // Weight layout: [out_channels, in_channels, k, k] = [out_channels, in_channels, 1, 1]
+        // For 1x1: weight[oc, ic, 0, 0] = weight[oc * (in_channels * 1 * 1) + ic * (1 * 1) + 0 * 1 + 0]
+        //         = weight[oc * in_channels + ic]
+        static int debug_count = 0;
         for (int32_t b = 0; b < input->n; b++) {
             for (int32_t oc = 0; oc < layer->params.out_channels; oc++) {
                 for (int32_t h = 0; h < input->h; h++) {
                     for (int32_t w = 0; w < input->w; w++) {
                         float sum = layer->bias ? layer->bias[oc] : 0.0f;
+                        float conv_sum = 0.0f;  // Track conv contribution separately
                         for (int32_t ic = 0; ic < layer->in_channels; ic++) {
                             const float* in_val = tensor_at_const(input, b, ic, h, w);
-                            const float* w_val = &layer->weight[oc * layer->in_channels + ic];
-                            sum += (*in_val) * (*w_val);
+                            // Weight index: [oc, ic, 0, 0] in [out_channels, in_channels, 1, 1] layout
+                            // For 1x1 conv: weight[oc, ic, 0, 0] = weight[oc * in_channels + ic]
+                            size_t weight_idx = (size_t)(oc * layer->in_channels + ic);
+                            const float* w_val = &layer->weight[weight_idx];
+                            float product = (*in_val) * (*w_val);
+                            conv_sum += product;
+                            sum += product;
                         }
+                        // Debug output removed - issue resolved
                         *tensor_at(output, b, oc, h, w) = sum;
                     }
                 }

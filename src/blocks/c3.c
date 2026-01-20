@@ -2,9 +2,147 @@
 #include "../core/common.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include "../core/weights_loader.h"
 #include "../ops/activation.h"
 #include "../ops/concat.h"
+#include "../core/tensor.h"
+#include "bottleneck.h"
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#include <windows.h>
+#define access(path, mode) _access(path, mode)
+#define F_OK 0
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#endif
+
+// Debug: Save intermediate outputs if output directory is set
+static char g_c3_debug_dir[512] = {0};
+static int g_c3_debug_enabled = 0;  // Only enable for Layer 2
+void c3_set_debug_dir(const char* dir) {
+    if (dir) {
+        snprintf(g_c3_debug_dir, sizeof(g_c3_debug_dir), "%s", dir);
+        g_c3_debug_enabled = 1;
+    } else {
+        g_c3_debug_dir[0] = '\0';
+        g_c3_debug_enabled = 0;
+    }
+}
+
+// Helper: Find or create debug directory by trying multiple paths
+static const char* find_or_create_debug_dir(void) {
+    static char found_path[512] = {0};
+    static int initialized = 0;
+    
+    if (initialized && found_path[0] != '\0') {
+        return found_path;
+    }
+    
+    // Try paths from project root first (since program runs from build/Release/)
+    const char* debug_paths[] = {
+        "../../debug/c",      // From build/Release/ -> project root
+        "../../../debug/c",    // From build/Release/ -> project root (alternative)
+        "../debug/c",         // Fallback
+        "debug/c"             // Last resort (current directory)
+    };
+    
+    // Try to find existing directory (prioritize project root)
+    for (int i = 0; i < 4; i++) {
+        #ifdef _WIN32
+        // Convert / to \ for Windows
+        char win_path[512];
+        snprintf(win_path, sizeof(win_path), "%s", debug_paths[i]);
+        for (int j = 0; win_path[j]; j++) {
+            if (win_path[j] == '/') win_path[j] = '\\';
+        }
+        DWORD attrs = GetFileAttributesA(win_path);
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            snprintf(found_path, sizeof(found_path), "%s", debug_paths[i]);
+            initialized = 1;
+            return found_path;
+        }
+        #else
+        if (access(debug_paths[i], F_OK) == 0) {
+            snprintf(found_path, sizeof(found_path), "%s", debug_paths[i]);
+            initialized = 1;
+            return found_path;
+        }
+        #endif
+    }
+    
+    // If not found, try to create in each path
+    for (int i = 0; i < 4; i++) {
+        // Extract parent directory
+        char parent[512];
+        snprintf(parent, sizeof(parent), "%s", debug_paths[i]);
+        char* last_slash = strrchr(parent, '/');
+        #ifdef _WIN32
+        if (!last_slash) last_slash = strrchr(parent, '\\');
+        #endif
+        if (last_slash) {
+            *last_slash = '\0';
+        }
+        
+        // Try to create parent and then debug/c
+        #ifdef _WIN32
+        char win_path[512];
+        snprintf(win_path, sizeof(win_path), "%s", debug_paths[i]);
+        for (int j = 0; win_path[j]; j++) {
+            if (win_path[j] == '/') win_path[j] = '\\';
+        }
+        if (parent[0] != '\0') {
+            char win_parent[512];
+            snprintf(win_parent, sizeof(win_parent), "%s", parent);
+            for (int j = 0; win_parent[j]; j++) {
+                if (win_parent[j] == '/') win_parent[j] = '\\';
+            }
+            _mkdir(win_parent);
+        }
+        _mkdir(win_path);
+        // Test if creation was successful
+        DWORD attrs = GetFileAttributesA(win_path);
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            snprintf(found_path, sizeof(found_path), "%s", debug_paths[i]);
+            initialized = 1;
+            return found_path;
+        }
+        #else
+        if (parent[0] != '\0') {
+            mkdir(parent, 0755);
+        }
+        if (mkdir(debug_paths[i], 0755) == 0 || access(debug_paths[i], F_OK) == 0) {
+            snprintf(found_path, sizeof(found_path), "%s", debug_paths[i]);
+            initialized = 1;
+            return found_path;
+        }
+        #endif
+    }
+    
+    // Fallback to first path
+    snprintf(found_path, sizeof(found_path), "debug/c");
+    initialized = 1;
+    return found_path;
+}
+
+// Helper: Build full path for debug file
+static void build_debug_path(char* out_path, size_t out_size, const char* filename) {
+    const char* debug_dir = find_or_create_debug_dir();
+    #ifdef _WIN32
+    // Convert / to \ for Windows
+    char win_dir[512];
+    snprintf(win_dir, sizeof(win_dir), "%s", debug_dir);
+    for (int i = 0; win_dir[i]; i++) {
+        if (win_dir[i] == '/') win_dir[i] = '\\';
+    }
+    snprintf(out_path, out_size, "%s\\%s", win_dir, filename);
+    #else
+    snprintf(out_path, out_size, "%s/%s", debug_dir, filename);
+    #endif
+}
 
 int c3_init(c3_block_t* block, int32_t c1, int32_t c2, int32_t n, int shortcut) {
     if (!block) return -1;
@@ -156,6 +294,8 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
         return -1;
     }
     
+    // Debug directory will be found/created when needed
+    
     // Allocate workspaces if not provided
     int need_free_ws1 = 0, need_free_ws2 = 0;
     
@@ -180,16 +320,49 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
         need_free_ws2 = 1;
     }
     
+    // Debug: Check memory relationship
+    if (input->data == workspace1->data || input->data == workspace2->data || 
+        input->data == output->data || workspace1->data == output->data) {
+        fprintf(stderr, "Warning: c3_forward: Memory overlap detected!\n");
+        fprintf(stderr, "  input->data=%p, output->data=%p\n", (void*)input->data, (void*)output->data);
+        fprintf(stderr, "  workspace1->data=%p, workspace2->data=%p\n", (void*)workspace1->data, (void*)workspace2->data);
+    }
+    
     // Main path: cv1 -> bottlenecks -> (stored in workspace1)
+    // Check if input and workspace1 share the same memory
+    if (input->data == workspace1->data) {
+        fprintf(stderr, "Error: c3_forward: cv1 input and workspace1 share the same memory!\n");
+        fprintf(stderr, "  input->data=%p, workspace1->data=%p\n", (void*)input->data, (void*)workspace1->data);
+        fprintf(stderr, "  This will cause input data to be overwritten. Need separate workspace.\n");
+        goto error;
+    }
+    
     if (conv2d_forward(&block->cv1, input, workspace1) != 0) {
         fprintf(stderr, "Error: c3_forward: cv1 conv2d failed\n");
+        fprintf(stderr, "  input: (%d, %d, %d, %d), workspace1: (%d, %d, %d, %d)\n",
+                input->n, input->c, input->h, input->w,
+                workspace1->n, workspace1->c, workspace1->h, workspace1->w);
+        fprintf(stderr, "  cv1: in_channels=%d, out_channels=%d\n",
+                block->cv1.in_channels, block->cv1.params.out_channels);
         goto error;
     }
-    if (batchnorm2d_forward(&block->cv1_bn, workspace1, workspace1) != 0) {
-        fprintf(stderr, "Error: c3_forward: cv1 batchnorm failed\n");
-        goto error;
+    // Skip BN if fused
+    if (!block->cv1_is_fused) {
+        if (batchnorm2d_forward(&block->cv1_bn, workspace1, workspace1) != 0) {
+            fprintf(stderr, "Error: c3_forward: cv1 batchnorm failed\n");
+            goto error;
+        }
     }
     activation_silu(workspace1);
+    
+    // Debug: Save cv1 output (only if debug enabled)
+    if (g_c3_debug_enabled) {
+        char filepath[512];
+        build_debug_path(filepath, sizeof(filepath), "c3_cv1_output.bin");
+        if (tensor_dump(workspace1, filepath) != 0) {
+            fprintf(stderr, "Warning: Failed to save cv1 output to %s\n", filepath);
+        }
+    }
     
     // Pass through bottlenecks
     // Bottlenecks need temporary buffer (c_ channels)
@@ -218,6 +391,15 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
     
     if (bottleneck_temp) tensor_free(bottleneck_temp);
     
+    // Debug: Save bottleneck output (only if debug enabled)
+    if (g_c3_debug_enabled) {
+        char filepath[512];
+        build_debug_path(filepath, sizeof(filepath), "c3_bottleneck_output.bin");
+        if (tensor_dump(workspace1, filepath) != 0) {
+            fprintf(stderr, "Warning: Failed to save bottleneck output to %s\n", filepath);
+        }
+    }
+    
     // Skip path: cv2
     // Need separate buffer for skip path output (c_ channels)
     tensor_t* skip_output = tensor_create(input->n, block->c_, input->h, input->w);
@@ -231,12 +413,26 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
         tensor_free(skip_output);
         goto error;
     }
-    if (batchnorm2d_forward(&block->cv2_bn, skip_output, skip_output) != 0) {
-        fprintf(stderr, "Error: c3_forward: cv2 batchnorm failed\n");
-        tensor_free(skip_output);
-        goto error;
+    
+    // Skip BN if fused
+    if (!block->cv2_is_fused) {
+        if (batchnorm2d_forward(&block->cv2_bn, skip_output, skip_output) != 0) {
+            fprintf(stderr, "Error: c3_forward: cv2 batchnorm failed\n");
+            tensor_free(skip_output);
+            goto error;
+        }
     }
-    // Note: cv2 doesn't have activation in original YOLOv5
+    // Apply SiLU activation (cv2 has activation in YOLOv5)
+    activation_silu(skip_output);
+    
+    // Debug: Save cv2 output (only if debug enabled)
+    if (g_c3_debug_enabled) {
+        char filepath[512];
+        build_debug_path(filepath, sizeof(filepath), "c3_cv2_output.bin");
+        if (tensor_dump(skip_output, filepath) != 0) {
+            fprintf(stderr, "Warning: Failed to save cv2 output to %s\n", filepath);
+        }
+    }
     
     // Concat: [workspace1 (main path), skip_output] -> workspace2
     const tensor_t* concat_inputs[2] = {workspace1, skip_output};
@@ -247,6 +443,15 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
     }
     
     tensor_free(skip_output);  // Free skip_output after concat
+    
+    // Debug: Save concat output (only if debug enabled)
+    if (g_c3_debug_enabled) {
+        char filepath[512];
+        build_debug_path(filepath, sizeof(filepath), "c3_concat_output.bin");
+        if (tensor_dump(workspace2, filepath) != 0) {
+            fprintf(stderr, "Warning: Failed to save concat output to %s\n", filepath);
+        }
+    }
     
     // cv3: 2*c_ -> c2
     // Verify tensor sizes before conv2d
@@ -276,11 +481,25 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
                 block->cv3.in_channels, block->cv3.params.out_channels);
         goto error;
     }
-    if (batchnorm2d_forward(&block->cv3_bn, output, output) != 0) {
-        fprintf(stderr, "Error: c3_forward: cv3 batchnorm failed\n");
-        goto error;
+    
+    // Skip BN if fused
+    if (!block->cv3_is_fused) {
+        if (batchnorm2d_forward(&block->cv3_bn, output, output) != 0) {
+            fprintf(stderr, "Error: c3_forward: cv3 batchnorm failed\n");
+            goto error;
+        }
     }
+    
     activation_silu(output);
+    
+    // Debug: Save final cv3 output (only if debug enabled)
+    if (g_c3_debug_enabled) {
+        char filepath[512];
+        build_debug_path(filepath, sizeof(filepath), "c3_final_output.bin");
+        if (tensor_dump(output, filepath) != 0) {
+            fprintf(stderr, "Warning: Failed to save final cv3 output to %s\n", filepath);
+        }
+    }
     
     if (need_free_ws1) tensor_free(workspace1);
     if (need_free_ws2) tensor_free(workspace2);
@@ -304,52 +523,117 @@ int c3_load_weights(c3_block_t* block, void* weights_loader, const char* prefix)
     // Load cv1
     snprintf(name, sizeof(name), "%s.cv1.conv.weight", prefix);
     float* w = weights_loader_get(loader, name, shape, &num_dims);
-    if (w) conv2d_load_weights(&block->cv1, w, NULL);
+    if (!w) {
+        fprintf(stderr, "Error: Failed to load weight for %s\n", name);
+        return -1;
+    }
+    // Try to load fused bias
+    snprintf(name, sizeof(name), "%s.cv1.conv.bias", prefix);
+    float* fused_bias = weights_loader_get(loader, name, shape, &num_dims);
+    conv2d_load_weights(&block->cv1, w, fused_bias);
     
-    snprintf(name, sizeof(name), "%s.cv1.bn.weight", prefix);
-    float* bn_w = weights_loader_get(loader, name, shape, &num_dims);
-    snprintf(name, sizeof(name), "%s.cv1.bn.bias", prefix);
-    float* bn_b = weights_loader_get(loader, name, shape, &num_dims);
-    snprintf(name, sizeof(name), "%s.cv1.bn.running_mean", prefix);
-    float* bn_mean = weights_loader_get(loader, name, shape, &num_dims);
-    snprintf(name, sizeof(name), "%s.cv1.bn.running_var", prefix);
-    float* bn_var = weights_loader_get(loader, name, shape, &num_dims);
-    if (bn_w && bn_b && bn_mean && bn_var) {
-        batchnorm2d_load_weights(&block->cv1_bn, bn_w, bn_b, bn_mean, bn_var);
+    // Load BN weights or set to identity if fused
+    if (fused_bias) {
+        // Fused: set BN to identity
+        block->cv1_is_fused = 1;
+        for (int i = 0; i < block->c_; i++) {
+            block->cv1_bn.weight[i] = 1.0f;
+            block->cv1_bn.bias[i] = 0.0f;
+            block->cv1_bn.running_mean[i] = 0.0f;
+            block->cv1_bn.running_var[i] = 1.0f;
+        }
+    } else {
+        // Not fused: load BN weights
+        block->cv1_is_fused = 0;
+        snprintf(name, sizeof(name), "%s.cv1.bn.weight", prefix);
+        float* bn_w = weights_loader_get(loader, name, shape, &num_dims);
+        snprintf(name, sizeof(name), "%s.cv1.bn.bias", prefix);
+        float* bn_b = weights_loader_get(loader, name, shape, &num_dims);
+        snprintf(name, sizeof(name), "%s.cv1.bn.running_mean", prefix);
+        float* bn_mean = weights_loader_get(loader, name, shape, &num_dims);
+        snprintf(name, sizeof(name), "%s.cv1.bn.running_var", prefix);
+        float* bn_var = weights_loader_get(loader, name, shape, &num_dims);
+        if (bn_w && bn_b && bn_mean && bn_var) {
+            batchnorm2d_load_weights(&block->cv1_bn, bn_w, bn_b, bn_mean, bn_var);
+        }
     }
     
     // Load cv2
     snprintf(name, sizeof(name), "%s.cv2.conv.weight", prefix);
     w = weights_loader_get(loader, name, shape, &num_dims);
-    if (w) conv2d_load_weights(&block->cv2, w, NULL);
+    if (!w) {
+        fprintf(stderr, "Error: Failed to load weight for %s\n", name);
+        return -1;
+    }
+    // Try to load fused bias
+    snprintf(name, sizeof(name), "%s.cv2.conv.bias", prefix);
+    fused_bias = weights_loader_get(loader, name, shape, &num_dims);
     
-    snprintf(name, sizeof(name), "%s.cv2.bn.weight", prefix);
-    bn_w = weights_loader_get(loader, name, shape, &num_dims);
-    snprintf(name, sizeof(name), "%s.cv2.bn.bias", prefix);
-    bn_b = weights_loader_get(loader, name, shape, &num_dims);
-    snprintf(name, sizeof(name), "%s.cv2.bn.running_mean", prefix);
-    bn_mean = weights_loader_get(loader, name, shape, &num_dims);
-    snprintf(name, sizeof(name), "%s.cv2.bn.running_var", prefix);
-    bn_var = weights_loader_get(loader, name, shape, &num_dims);
-    if (bn_w && bn_b && bn_mean && bn_var) {
-        batchnorm2d_load_weights(&block->cv2_bn, bn_w, bn_b, bn_mean, bn_var);
+    conv2d_load_weights(&block->cv2, w, fused_bias);
+    
+    // Load BN weights or set to identity if fused
+    if (fused_bias) {
+        // Fused: set BN to identity
+        block->cv2_is_fused = 1;
+        for (int i = 0; i < block->c_; i++) {
+            block->cv2_bn.weight[i] = 1.0f;
+            block->cv2_bn.bias[i] = 0.0f;
+            block->cv2_bn.running_mean[i] = 0.0f;
+            block->cv2_bn.running_var[i] = 1.0f;
+        }
+    } else {
+        // Not fused: load BN weights
+        block->cv2_is_fused = 0;
+        snprintf(name, sizeof(name), "%s.cv2.bn.weight", prefix);
+        float* bn_w = weights_loader_get(loader, name, shape, &num_dims);
+        snprintf(name, sizeof(name), "%s.cv2.bn.bias", prefix);
+        float* bn_b = weights_loader_get(loader, name, shape, &num_dims);
+        snprintf(name, sizeof(name), "%s.cv2.bn.running_mean", prefix);
+        float* bn_mean = weights_loader_get(loader, name, shape, &num_dims);
+        snprintf(name, sizeof(name), "%s.cv2.bn.running_var", prefix);
+        float* bn_var = weights_loader_get(loader, name, shape, &num_dims);
+        if (bn_w && bn_b && bn_mean && bn_var) {
+            batchnorm2d_load_weights(&block->cv2_bn, bn_w, bn_b, bn_mean, bn_var);
+        }
     }
     
     // Load cv3
     snprintf(name, sizeof(name), "%s.cv3.conv.weight", prefix);
     w = weights_loader_get(loader, name, shape, &num_dims);
-    if (w) conv2d_load_weights(&block->cv3, w, NULL);
+    if (!w) {
+        fprintf(stderr, "Error: Failed to load weight for %s\n", name);
+        return -1;
+    }
     
-    snprintf(name, sizeof(name), "%s.cv3.bn.weight", prefix);
-    bn_w = weights_loader_get(loader, name, shape, &num_dims);
-    snprintf(name, sizeof(name), "%s.cv3.bn.bias", prefix);
-    bn_b = weights_loader_get(loader, name, shape, &num_dims);
-    snprintf(name, sizeof(name), "%s.cv3.bn.running_mean", prefix);
-    bn_mean = weights_loader_get(loader, name, shape, &num_dims);
-    snprintf(name, sizeof(name), "%s.cv3.bn.running_var", prefix);
-    bn_var = weights_loader_get(loader, name, shape, &num_dims);
-    if (bn_w && bn_b && bn_mean && bn_var) {
-        batchnorm2d_load_weights(&block->cv3_bn, bn_w, bn_b, bn_mean, bn_var);
+    // Try to load fused bias
+    snprintf(name, sizeof(name), "%s.cv3.conv.bias", prefix);
+    fused_bias = weights_loader_get(loader, name, shape, &num_dims);
+    conv2d_load_weights(&block->cv3, w, fused_bias);
+    
+    // Load BN weights or set to identity if fused
+    if (fused_bias) {
+        // Fused: set BN to identity
+        block->cv3_is_fused = 1;
+        for (int i = 0; i < block->c2; i++) {
+            block->cv3_bn.weight[i] = 1.0f;
+            block->cv3_bn.bias[i] = 0.0f;
+            block->cv3_bn.running_mean[i] = 0.0f;
+            block->cv3_bn.running_var[i] = 1.0f;
+        }
+    } else {
+        // Not fused: load BN weights
+        block->cv3_is_fused = 0;
+        snprintf(name, sizeof(name), "%s.cv3.bn.weight", prefix);
+        float* bn_w = weights_loader_get(loader, name, shape, &num_dims);
+        snprintf(name, sizeof(name), "%s.cv3.bn.bias", prefix);
+        float* bn_b = weights_loader_get(loader, name, shape, &num_dims);
+        snprintf(name, sizeof(name), "%s.cv3.bn.running_mean", prefix);
+        float* bn_mean = weights_loader_get(loader, name, shape, &num_dims);
+        snprintf(name, sizeof(name), "%s.cv3.bn.running_var", prefix);
+        float* bn_var = weights_loader_get(loader, name, shape, &num_dims);
+        if (bn_w && bn_b && bn_mean && bn_var) {
+            batchnorm2d_load_weights(&block->cv3_bn, bn_w, bn_b, bn_mean, bn_var);
+        }
     }
     
     // Load bottlenecks

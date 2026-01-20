@@ -24,10 +24,13 @@
 typedef struct {
     conv2d_layer_t cv1;        // 1×1 conv: c1 -> c_
     batchnorm2d_layer_t cv1_bn;
+    int cv1_is_fused;          // Flag: cv1 Conv+BN is fused
     conv2d_layer_t cv2;        // 1×1 conv: c1 -> c_ (skip path)
     batchnorm2d_layer_t cv2_bn;
+    int cv2_is_fused;          // Flag: cv2 Conv+BN is fused
     conv2d_layer_t cv3;        // 1×1 conv: 2*c_ -> c2
     batchnorm2d_layer_t cv3_bn;
+    int cv3_is_fused;          // Flag: cv3 Conv+BN is fused
     bottleneck_t* bottlenecks;  // Array of n bottlenecks
     int32_t n;                  // Number of bottlenecks
     int32_t c1, c2, c_;        // Input, output, hidden channels
@@ -54,5 +57,10 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
  * Load weights from weights loader
  */
 int c3_load_weights(c3_block_t* block, void* weights_loader, const char* prefix);
+
+/**
+ * Set debug output directory for intermediate tensor dumps
+ */
+void c3_set_debug_dir(const char* dir);
 
 #endif // C3_H

@@ -15,8 +15,10 @@
 typedef struct {
     conv2d_layer_t conv1;      // 1×1 conv
     batchnorm2d_layer_t bn1;
+    int conv1_is_fused;        // Flag: conv1 Conv+BN is fused
     conv2d_layer_t conv2;      // 3×3 conv
     batchnorm2d_layer_t bn2;
+    int conv2_is_fused;        // Flag: conv2 Conv+BN is fused
     int shortcut;              // Use shortcut connection
     int32_t c1, c2;            // Input/output channels
 } bottleneck_t;
@@ -40,5 +42,10 @@ int bottleneck_forward(bottleneck_t* block, const tensor_t* input, tensor_t* out
  * Load weights from weights loader
  */
 int bottleneck_load_weights(bottleneck_t* block, void* weights_loader, const char* prefix);
+
+/**
+ * Set debug output directory for intermediate tensor dumps
+ */
+void bottleneck_set_debug_dir(const char* dir);
 
 #endif // BOTTLENECK_H

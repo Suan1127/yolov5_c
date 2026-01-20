@@ -16,6 +16,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/blocks
     ${CMAKE_CURRENT_SOURCE_DIR}/src/models
     ${CMAKE_CURRENT_SOURCE_DIR}/src/postprocess
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/jsmn
 )
 
 # Source files
@@ -23,6 +24,7 @@ set(CORE_SOURCES
     src/core/tensor.c
     src/core/memory.c
     src/core/weights_loader.c
+    third_party/jsmn/jsmn.c
 )
 
 set(OPS_SOURCES
@@ -77,7 +79,7 @@ endif()
 # Compiler flags
 if(MSVC)
     add_compile_options(/W4)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    # _CRT_SECURE_NO_WARNINGS is already defined in src/core/common.h
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
     add_compile_options(-O2 -march=native)  # Optimization

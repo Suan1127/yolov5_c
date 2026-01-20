@@ -27,6 +27,7 @@ typedef struct {
     struct {
         conv2d_layer_t conv;
         batchnorm2d_layer_t bn;
+        int32_t is_fused;  // 1 if Conv+BN is fused, 0 otherwise
         int32_t in_channels;
         int32_t out_channels;
         int32_t kernel_size;
@@ -48,6 +49,7 @@ typedef struct {
     struct {
         conv2d_layer_t conv;
         batchnorm2d_layer_t bn;
+        int32_t is_fused;  // 1 if Conv+BN is fused, 0 otherwise
         int32_t in_channels;
         int32_t out_channels;
     } head_convs[4];

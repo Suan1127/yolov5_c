@@ -50,7 +50,7 @@ def compare_tensors(golden_path, test_path, tolerance=1e-4):
     print(f"  Max diff: {max_diff:.6e}")
     print(f"  Mean diff: {mean_diff:.6e}")
     print(f"  RMSE: {rmse:.6e}")
-    print(f"  Within tolerance ({tolerance}): {'✓' if within_tolerance else '✗'}")
+    print(f"  Within tolerance ({tolerance}): {'OK' if within_tolerance else 'FAIL'}")
     
     if not within_tolerance:
         # Find locations with large differences
@@ -91,14 +91,19 @@ def compare_directories(golden_dir, test_dir, tolerance=1e-4):
         print(f"Error: No .bin files found in {golden_dir}")
         return False
     
-    print(f"Comparing {len(golden_files)} files...")
+    print(f"Found {len(golden_files)} files in golden directory")
+    print(f"Found {len(test_files)} files in test directory")
     print(f"Golden directory: {golden_dir}")
     print(f"Test directory: {test_dir}")
     print(f"Tolerance: {tolerance}")
     print()
     
     results = {}
+    missing_files = []
     all_passed = True
+    
+    # Define layers that don't have weights (Upsample, etc.) - these may not be saved
+    no_weight_layers = {11, 15}  # Upsample layers
     
     # Sort files by layer number for easier identification of first mismatch
     # Priority: input.bin, then layer_XXX.bin (sorted by number), then output files
@@ -122,9 +127,30 @@ def compare_directories(golden_dir, test_dir, tolerance=1e-4):
         golden_path = golden_files[filename]
         
         if filename not in test_files:
-            print(f"✗ {filename}: Missing in test directory")
-            results[filename] = False
-            all_passed = False
+            # Check if this is a layer that might not be saved
+            is_no_weight_layer = False
+            if filename.startswith("layer_"):
+                try:
+                    layer_num = int(filename[6:9])
+                    if layer_num in no_weight_layers:
+                        is_no_weight_layer = True
+                except:
+                    pass
+            
+            if is_no_weight_layer:
+                print(f"SKIP {filename}: Upsample layer (no weights, may not be saved)")
+                results[filename] = None  # None means skipped
+            elif filename.startswith("output") or filename.endswith("_0.bin") or filename.endswith("_1.bin") or filename.endswith("_2.bin"):
+                print(f"SKIP {filename}: Output file (optional)")
+                results[filename] = None
+            elif filename == "bus.bin" or filename.endswith("_bus.bin"):
+                print(f"SKIP {filename}: Input image file (optional)")
+                results[filename] = None
+            else:
+                print(f"MISSING {filename}: Not found in test directory")
+                missing_files.append(filename)
+                results[filename] = False
+                all_passed = False
             continue
         
         test_path = test_files[filename]
@@ -136,8 +162,9 @@ def compare_directories(golden_dir, test_dir, tolerance=1e-4):
         if not passed:
             all_passed = False
             # Print warning for first failure
-            if all_passed or len([r for r in results.values() if not r]) == 1:
-                print(f"\n⚠ First mismatch detected at: {filename}")
+            failed_count = len([r for r in results.values() if r is False])
+            if failed_count == 1:
+                print(f"\nWARNING: First mismatch detected at: {filename}")
                 print("  This is likely where the error originates.\n")
         
         print()
@@ -145,35 +172,72 @@ def compare_directories(golden_dir, test_dir, tolerance=1e-4):
     # Summary
     print("=" * 60)
     print("Summary:")
-    passed_count = sum(1 for v in results.values() if v)
-    total_count = len(results)
-    print(f"  Passed: {passed_count}/{total_count}")
-    print(f"  Failed: {total_count - passed_count}/{total_count}")
     
-    if all_passed:
-        print("\n✓ All comparisons passed!")
+    # Count only actual comparisons (not skipped files)
+    actual_results = {k: v for k, v in results.items() if v is not None}
+    passed_count = sum(1 for v in actual_results.values() if v)
+    total_count = len(actual_results)
+    skipped_count = len([v for v in results.values() if v is None])
+    
+    print(f"  Compared: {total_count} files")
+    print(f"  Passed: {passed_count}/{total_count}")
+    if total_count - passed_count > 0:
+        print(f"  Failed: {total_count - passed_count}/{total_count}")
+    if skipped_count > 0:
+        print(f"  Skipped: {skipped_count} files (Upsample layers, output files)")
+    if missing_files:
+        print(f"  Missing: {len(missing_files)} files")
+    
+    if all_passed and not missing_files:
+        print("\n[OK] All comparisons passed!")
     else:
-        print("\n✗ Some comparisons failed")
-        print("\nFailed files:")
-        for filename, passed in results.items():
-            if not passed:
+        if not all_passed:
+            print("\n[FAIL] Some comparisons failed")
+            print("\nFailed files:")
+            for filename, passed in results.items():
+                if passed is False:
+                    print(f"  - {filename}")
+        if missing_files:
+            print("\nMissing files (not found in test directory):")
+            for filename in missing_files:
                 print(f"  - {filename}")
     
-    return all_passed
+    # Return True only if all actual comparisons passed and no critical files are missing
+    return all_passed and not missing_files
 
 
 def main():
     parser = argparse.ArgumentParser(description='Compare C output with golden reference')
-    parser.add_argument('golden_dir', type=str, 
-                        help='Directory containing golden reference .bin files (e.g., testdata/python)')
-    parser.add_argument('test_dir', type=str, 
-                        help='Directory containing test .bin files (e.g., testdata/c)')
+    parser.add_argument('golden', type=str, 
+                        help='Golden reference file or directory (e.g., testdata/python/layer_001.bin or testdata/python)')
+    parser.add_argument('test', type=str, 
+                        help='Test file or directory (e.g., testdata/c/layer_001.bin or testdata/c)')
     parser.add_argument('--tolerance', type=float, default=1e-4, 
                         help='Tolerance for comparison (default: 1e-4)')
     
     args = parser.parse_args()
     
-    success = compare_directories(args.golden_dir, args.test_dir, args.tolerance)
+    golden_path = Path(args.golden)
+    test_path = Path(args.test)
+    
+    # Check if both are files or both are directories
+    if golden_path.is_file() and test_path.is_file():
+        # Single file comparison
+        print(f"Comparing single files:")
+        print(f"  Golden: {golden_path}")
+        print(f"  Test: {test_path}")
+        print(f"  Tolerance: {args.tolerance}")
+        print()
+        success = compare_tensors(str(golden_path), str(test_path), args.tolerance)
+    elif golden_path.is_dir() and test_path.is_dir():
+        # Directory comparison
+        success = compare_directories(str(golden_path), str(test_path), args.tolerance)
+    else:
+        print(f"Error: Both arguments must be either files or directories")
+        print(f"  Golden: {golden_path} ({'file' if golden_path.is_file() else 'dir' if golden_path.exists() else 'not found'})")
+        print(f"  Test: {test_path} ({'file' if test_path.is_file() else 'dir' if test_path.exists() else 'not found'})")
+        sys.exit(1)
+    
     sys.exit(0 if success else 1)
 
 

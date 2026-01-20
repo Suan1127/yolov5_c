@@ -41,8 +41,9 @@ def export_weights(model_path, output_dir, depth_multiple=0.33, width_multiple=0
     print(f"Loading YOLOv5 model from {model_path}...")
     
     # Load model using YOLOv5's attempt_load (handles .pt format correctly)
+    # Note: fuse=True to match inference behavior (Conv+BN are fused)
     try:
-        model = attempt_load(model_path, device='cpu', inplace=False, fuse=False)
+        model = attempt_load(model_path, device='cpu', inplace=False, fuse=True)
     except Exception as e:
         print(f"Error loading model with attempt_load: {e}")
         print("Falling back to torch.load...")

@@ -74,7 +74,8 @@ build\Release\yolov5_infer.exe bus
 **동작:**
 - 입력 텐서를 `data/inputs/bus.bin`에서 로드
 - 모델 가중치를 `weights/weights.bin`에서 로드
-- 중간 레이어 출력을 `testdata/c/`에 저장
+- 중간 레이어 출력을 `testdata/c/`에 저장 (layer_*.bin, output_p*.bin)
+- 디버그 출력은 `debug/c/`에 저장 (c3_*.bin, bottleneck_*.bin 등)
 - 최종 detection 결과를 `data/outputs/bus_detections.txt`에 저장
 
 **저장되는 파일:**
@@ -204,6 +205,7 @@ python tools/validate.py bus --model path/to/yolov5s.pt
 ### 파일을 찾을 수 없음
 
 - `testdata/python/` 또는 `testdata/c/` 디렉토리가 존재하는지 확인
+- 디버그 파일은 `debug/pytorch/` (PyTorch) 및 `debug/c/` (C)에 저장됨
 - Python golden이 제대로 생성되었는지 확인
 - C 추론이 완료되었는지 확인
 

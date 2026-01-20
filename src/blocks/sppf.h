@@ -26,8 +26,10 @@
 typedef struct {
     conv2d_layer_t cv1;        // 1×1 conv: c1 -> c_
     batchnorm2d_layer_t cv1_bn;
+    int cv1_is_fused;          // Flag: cv1 Conv+BN is fused
     conv2d_layer_t cv2;        // 1×1 conv: 4*c_ -> c2
     batchnorm2d_layer_t cv2_bn;
+    int cv2_is_fused;          // Flag: cv2 Conv+BN is fused
     maxpool2d_params_t pool_params;  // MaxPool parameters
     int32_t c1, c2, c_;       // Input, output, hidden channels
 } sppf_block_t;
@@ -52,5 +54,10 @@ int sppf_forward(sppf_block_t* block, const tensor_t* input, tensor_t* output,
  * Load weights from weights loader
  */
 int sppf_load_weights(sppf_block_t* block, void* weights_loader, const char* prefix);
+
+/**
+ * Set debug directory for intermediate outputs (for debugging)
+ */
+void sppf_set_debug_dir(const char* dir);
 
 #endif // SPPF_H
