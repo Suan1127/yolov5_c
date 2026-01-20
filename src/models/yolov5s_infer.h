@@ -34,4 +34,19 @@ tensor_t* yolov5s_get_saved_feature(yolov5s_model_t* model, int32_t layer_idx);
  */
 int yolov5s_get_detect_features(yolov5s_model_t* model, tensor_t** p3, tensor_t** p4, tensor_t** p5);
 
+/**
+ * Set output directory for saving intermediate layer outputs
+ * @param model Model instance
+ * @param output_dir Directory path (NULL to disable saving)
+ * @return 0 on success, -1 on failure
+ */
+int yolov5s_set_output_dir(yolov5s_model_t* model, const char* output_dir);
+
+/**
+ * Save all saved features to files
+ * @param model Model instance
+ * @return 0 on success, -1 on failure
+ */
+int yolov5s_save_features(yolov5s_model_t* model);
+
 #endif // YOLOV5S_INFER_H

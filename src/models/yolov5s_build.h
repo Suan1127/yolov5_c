@@ -59,9 +59,9 @@ typedef struct {
         int shortcut;
     } head_c3s[4];
     
-    // Saved feature maps (for FPN connections)
-    // Indices: 0=layer3, 1=layer4, 2=layer5, 3=layer6, 4=layer7, 5=layer9, 6=layer17, 7=layer20, 8=layer23
-    tensor_t* saved_features[9];
+    // Saved feature maps (for FPN connections and validation)
+    // Indices: 0=layer0, 1=layer1, 2=layer2, 3=layer3, 4=layer4, 5=layer5, 6=layer6, 7=layer7, 8=layer9, 9=layer17, 10=layer20, 11=layer23
+    tensor_t* saved_features[12];
     
     // Weights loader
     weights_loader_t* weights;

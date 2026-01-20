@@ -4,9 +4,20 @@
 #include "../ops/upsample.h"
 #include "../ops/concat.h"
 #include "../ops/conv2d.h"
+#include "../core/tensor.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(path, mode) _mkdir(path)
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
+
+// Output directory for saving intermediate tensors
+static char g_output_dir[512] = {0};
 
 // Forward declaration for conv2d_output_size helper
 static void conv2d_output_size_helper(int32_t in_h, int32_t in_w, 
@@ -19,11 +30,11 @@ static void conv2d_output_size_helper(int32_t in_h, int32_t in_w,
 // Helper: Save feature map
 static void save_feature(yolov5s_model_t* model, int32_t layer_idx, tensor_t* feature) {
     // Map layer index to save array index
-    // Save list: [3, 4, 5, 6, 7, 9, 17, 20, 23]
-    int32_t save_map[] = {3, 4, 5, 6, 7, 9, 17, 20, 23};
+    // Save list: [0, 1, 2, 3, 4, 5, 6, 7, 9, 17, 20, 23]
+    int32_t save_map[] = {0, 1, 2, 3, 4, 5, 6, 7, 9, 17, 20, 23};
     int32_t save_idx = -1;
     
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 12; i++) {
         if (save_map[i] == layer_idx) {
             save_idx = i;
             break;
@@ -43,6 +54,19 @@ static void save_feature(yolov5s_model_t* model, int32_t layer_idx, tensor_t* fe
         if (model->saved_features[save_idx]) {
             tensor_copy(model->saved_features[save_idx], feature);
         }
+        
+        // Save to file if output directory is set
+        if (g_output_dir[0] != '\0' && feature) {
+            char filepath[512];
+            snprintf(filepath, sizeof(filepath), "%s/layer_%03d.bin", g_output_dir, layer_idx);
+            int ret = tensor_dump(feature, filepath);
+            if (ret == 0) {
+                printf("      Saved layer %d to %s\n", layer_idx, filepath);
+                fflush(stdout);
+            } else {
+                fprintf(stderr, "      Warning: Failed to save layer %d to %s\n", layer_idx, filepath);
+            }
+        }
     }
 }
 
@@ -50,8 +74,8 @@ static void save_feature(yolov5s_model_t* model, int32_t layer_idx, tensor_t* fe
 tensor_t* yolov5s_get_saved_feature(yolov5s_model_t* model, int32_t layer_idx) {
     if (!model) return NULL;
     
-    int32_t save_map[] = {3, 4, 5, 6, 7, 9, 17, 20, 23};
-    for (int i = 0; i < 9; i++) {
+    int32_t save_map[] = {0, 1, 2, 3, 4, 5, 6, 7, 9, 17, 20, 23};
+    for (int i = 0; i < 12; i++) {
         if (save_map[i] == layer_idx) {
             return model->saved_features[i];
         }
@@ -71,10 +95,68 @@ int yolov5s_get_detect_features(yolov5s_model_t* model, tensor_t** p3, tensor_t*
     return 0;
 }
 
+int yolov5s_set_output_dir(yolov5s_model_t* model, const char* output_dir) {
+    if (!model) return -1;
+    
+    if (output_dir == NULL || output_dir[0] == '\0') {
+        g_output_dir[0] = '\0';
+        return 0;
+    }
+    
+    // Copy directory path
+    strncpy(g_output_dir, output_dir, sizeof(g_output_dir) - 1);
+    g_output_dir[sizeof(g_output_dir) - 1] = '\0';
+    
+    // Create directory if it doesn't exist
+    #ifdef _WIN32
+    // Try to create directory (ignore error if already exists)
+    _mkdir(g_output_dir);
+    #else
+    mkdir(g_output_dir, 0755);
+    #endif
+    
+    printf("  Output directory configured: %s\n", g_output_dir);
+    fflush(stdout);
+    
+    return 0;
+}
+
+int yolov5s_save_features(yolov5s_model_t* model) {
+    if (!model || g_output_dir[0] == '\0') return 0;
+    
+    int32_t save_map[] = {0, 1, 2, 3, 4, 5, 6, 7, 9, 17, 20, 23};
+    int saved_count = 0;
+    
+    for (int i = 0; i < 12; i++) {
+        if (model->saved_features[i]) {
+            char filepath[512];
+            snprintf(filepath, sizeof(filepath), "%s/layer_%03d.bin", g_output_dir, save_map[i]);
+            if (tensor_dump(model->saved_features[i], filepath) == 0) {
+                saved_count++;
+            }
+        }
+    }
+    
+    return (saved_count > 0) ? 0 : -1;
+}
+
 int yolov5s_forward(yolov5s_model_t* model, const tensor_t* input, tensor_t* output[3]) {
     if (!model || !input || !output) {
         fprintf(stderr, "Error: yolov5s_forward: NULL pointer\n");
         return -1;
+    }
+    
+    // Save input tensor if output directory is set
+    if (g_output_dir[0] != '\0') {
+        char filepath[512];
+        snprintf(filepath, sizeof(filepath), "%s/input.bin", g_output_dir);
+        int ret = tensor_dump(input, filepath);
+        if (ret == 0) {
+            printf("  Saved input tensor to %s\n", filepath);
+            fflush(stdout);
+        } else {
+            fprintf(stderr, "  Warning: Failed to save input tensor to %s\n", filepath);
+        }
     }
     
     // Verify input shape (allow any size, but must be NCHW format)
@@ -147,6 +229,7 @@ int yolov5s_forward(yolov5s_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     activation_silu(buf_a);
+    save_feature(model, 0, buf_a);
     printf("    Layer 0 completed\n");
     fflush(stdout);
     
@@ -170,6 +253,7 @@ int yolov5s_forward(yolov5s_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     activation_silu(buf_b);
+    save_feature(model, 1, buf_b);
     printf("    Layer 1 completed\n");
     fflush(stdout);
     
@@ -198,6 +282,7 @@ int yolov5s_forward(yolov5s_model_t* model, const tensor_t* input, tensor_t* out
         fprintf(stderr, "Error: C3 forward failed at Layer 2\n");
         goto error;
     }
+    save_feature(model, 2, buf_b);
     printf("    Layer 2 completed\n");
     fflush(stdout);
     
@@ -782,6 +867,30 @@ int yolov5s_forward(yolov5s_model_t* model, const tensor_t* input, tensor_t* out
     
     printf("  Head completed\n");
     fflush(stdout);
+    
+    // Save output tensors (P3, P4, P5) if output directory is set
+    // These are intermediate feature maps for Detect head, so save to testdata/c/
+    if (g_output_dir[0] != '\0' && output[0] && output[1] && output[2]) {
+        char filepath[512];
+        printf("  Saving output feature maps...\n");
+        fflush(stdout);
+        
+        snprintf(filepath, sizeof(filepath), "%s/output_p3.bin", g_output_dir);
+        if (tensor_dump(output[0], filepath) == 0) {
+            printf("    Saved P3 to %s\n", filepath);
+        }
+        
+        snprintf(filepath, sizeof(filepath), "%s/output_p4.bin", g_output_dir);
+        if (tensor_dump(output[1], filepath) == 0) {
+            printf("    Saved P4 to %s\n", filepath);
+        }
+        
+        snprintf(filepath, sizeof(filepath), "%s/output_p5.bin", g_output_dir);
+        if (tensor_dump(output[2], filepath) == 0) {
+            printf("    Saved P5 to %s\n", filepath);
+        }
+        fflush(stdout);
+    }
     
     // Cleanup
     tensor_free(buf_a);

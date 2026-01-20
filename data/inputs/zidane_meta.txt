@@ -1,0 +1,9 @@
+Image: zidane.jpg
+Tensor shape: [1, 3, 640, 640]
+Image size: 640
+Scale ratio: [0.5, 0.5]
+Padding: (dw=0.00, dh=140.00)
+
+Format: NCHW (Batch, Channels, Height, Width)
+Data type: float32
+Normalized: [0.0, 1.0]

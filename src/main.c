@@ -206,6 +206,58 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
+    // Set output directory for saving intermediate layer tensors (for validation)
+    // Only save intermediate tensors to testdata/c/, not final detection results
+    // Final detection results are saved to data/outputs/ in the detection section below
+    const char* output_dir = NULL;
+    
+    // Try multiple paths for testdata/c directory
+    const char* test_paths[] = {
+        "testdata/c",
+        "../testdata/c",
+        "../../testdata/c"
+    };
+    
+    #ifdef _WIN32
+    for (int i = 0; i < 3; i++) {
+        char win_path[512];
+        snprintf(win_path, sizeof(win_path), "%s", test_paths[i]);
+        // Convert / to \ for Windows
+        for (int j = 0; win_path[j]; j++) {
+            if (win_path[j] == '/') win_path[j] = '\\';
+        }
+        DWORD attrs = GetFileAttributesA(win_path);
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            output_dir = test_paths[i];
+            printf("Found testdata/c directory: %s\n", output_dir);
+            break;
+        }
+    }
+    #else
+    for (int i = 0; i < 3; i++) {
+        if (access(test_paths[i], F_OK) == 0) {
+            output_dir = test_paths[i];
+            printf("Found testdata/c directory: %s\n", output_dir);
+            break;
+        }
+    }
+    #endif
+    
+    // Always try to set output directory (will create if doesn't exist)
+    // Default to testdata/c
+    if (!output_dir) {
+        output_dir = "testdata/c";
+        printf("Setting default output directory: %s (will be created if needed)\n", output_dir);
+    }
+    
+    int set_dir_ret = yolov5s_set_output_dir(model, output_dir);
+    if (set_dir_ret == 0) {
+        printf("Intermediate layer output directory set to: %s\n", output_dir);
+        printf("(Final detection results will be saved to data/outputs/)\n");
+    } else {
+        fprintf(stderr, "Warning: Failed to set output directory: %s\n", output_dir);
+    }
+    
     // Forward pass
     printf("\nRunning forward pass...\n");
     printf("This may take a while...\n");

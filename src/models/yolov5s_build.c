@@ -105,7 +105,7 @@ yolov5s_model_t* yolov5s_build(const char* weights_path, const char* model_meta_
     printf("Weights loaded successfully (size: %zu bytes)\n", model->weights->size);
     
     // Initialize saved features
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 12; i++) {
         model->saved_features[i] = NULL;
     }
     
@@ -147,7 +147,7 @@ void yolov5s_free(yolov5s_model_t* model) {
     }
     
     // Free saved features
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 12; i++) {
         if (model->saved_features[i]) {
             tensor_free(model->saved_features[i]);
         }
