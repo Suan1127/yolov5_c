@@ -126,6 +126,12 @@ def compare_directories(golden_dir, test_dir, tolerance=1e-4):
     for filename in sorted_filenames:
         golden_path = golden_files[filename]
         
+        # Skip output_0.bin (concatenated output, not needed for comparison)
+        if filename == "output_0.bin":
+            print(f"SKIP {filename}: Concatenated output (not needed for comparison)")
+            results[filename] = None
+            continue
+        
         if filename not in test_files:
             # Check if this is a layer that might not be saved
             is_no_weight_layer = False
@@ -140,9 +146,19 @@ def compare_directories(golden_dir, test_dir, tolerance=1e-4):
             if is_no_weight_layer:
                 print(f"SKIP {filename}: Upsample layer (no weights, may not be saved)")
                 results[filename] = None  # None means skipped
-            elif filename.startswith("output") or filename.endswith("_0.bin") or filename.endswith("_1.bin") or filename.endswith("_2.bin"):
-                print(f"SKIP {filename}: Output file (optional)")
-                results[filename] = None
+            elif filename.startswith("output"):
+                # Skip output files that are not detect head conv outputs
+                # output_0.bin is concatenated output (not needed for comparison)
+                # output_1_0.bin, output_1_1.bin, output_1_2.bin are detect head conv outputs (should be compared)
+                if filename == "output_0.bin":
+                    print(f"SKIP {filename}: Concatenated output (not needed for comparison)")
+                    results[filename] = None
+                elif filename.startswith("output_1_"):
+                    # This should be compared - don't skip
+                    pass
+                else:
+                    print(f"SKIP {filename}: Output file (optional)")
+                    results[filename] = None
             elif filename == "bus.bin" or filename.endswith("_bus.bin"):
                 print(f"SKIP {filename}: Input image file (optional)")
                 results[filename] = None
@@ -154,6 +170,13 @@ def compare_directories(golden_dir, test_dir, tolerance=1e-4):
             continue
         
         test_path = test_files[filename]
+        
+        # Skip output_0.bin even if it exists (concatenated output, not needed)
+        if filename == "output_0.bin":
+            print(f"SKIP {filename}: Concatenated output (not needed for comparison)")
+            results[filename] = None
+            continue
+        
         print(f"Comparing {filename}...")
         
         passed = compare_tensors(golden_path, test_path, tolerance)

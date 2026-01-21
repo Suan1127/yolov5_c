@@ -3,8 +3,8 @@
 #include <assert.h>
 #include <string.h>
 #include "../src/core/tensor.h"
-#include "../src/models/yolov5s_build.h"
-#include "../src/models/yolov5s_infer.h"
+#include "../src/models/yolov5n_build.h"
+#include "../src/models/yolov5n_infer.h"
 
 /**
  * Integration test: Load model and run forward pass
@@ -16,7 +16,7 @@ int test_model_build_and_forward() {
     
     // Build model
     printf("1. Building model...\n");
-    yolov5s_model_t* model = yolov5s_build(weights_path, NULL);
+    yolov5n_model_t* model = yolov5n_build(weights_path, NULL);
     if (!model) {
         printf("  ERROR: Failed to build model\n");
         return -1;
@@ -28,7 +28,7 @@ int test_model_build_and_forward() {
     tensor_t* input = tensor_create(1, 3, 640, 640);
     if (!input) {
         printf("  ERROR: Failed to create input tensor\n");
-        yolov5s_free(model);
+        yolov5n_free(model);
         return -1;
     }
     
@@ -42,28 +42,28 @@ int test_model_build_and_forward() {
     // Allocate outputs
     printf("\n3. Allocating output tensors...\n");
     tensor_t* outputs[3];
-    outputs[0] = tensor_create(1, 128, 80, 80);   // P3
-    outputs[1] = tensor_create(1, 256, 40, 40);   // P4
-    outputs[2] = tensor_create(1, 512, 20, 20);   // P5
+    outputs[0] = tensor_create(1, 64, 80, 80);   // P3 for YOLOv5n
+    outputs[1] = tensor_create(1, 128, 40, 40);   // P4 for YOLOv5n
+    outputs[2] = tensor_create(1, 256, 20, 20);   // P5 for YOLOv5n
     
     if (!outputs[0] || !outputs[1] || !outputs[2]) {
         printf("  ERROR: Failed to allocate output tensors\n");
         tensor_free(input);
-        yolov5s_free(model);
+        yolov5n_free(model);
         return -1;
     }
     printf("  ✓ Output tensors allocated\n");
     
     // Forward pass
     printf("\n4. Running forward pass...\n");
-    int ret = yolov5s_forward(model, input, outputs);
+    int ret = yolov5n_forward(model, input, outputs);
     if (ret != 0) {
         printf("  ERROR: Forward pass failed\n");
         tensor_free(outputs[0]);
         tensor_free(outputs[1]);
         tensor_free(outputs[2]);
         tensor_free(input);
-        yolov5s_free(model);
+        yolov5n_free(model);
         return -1;
     }
     printf("  ✓ Forward pass completed\n");
@@ -76,9 +76,9 @@ int test_model_build_and_forward() {
     
     // Check saved features
     printf("\n5. Checking saved features...\n");
-    tensor_t* p3 = yolov5s_get_saved_feature(model, 17);
-    tensor_t* p4 = yolov5s_get_saved_feature(model, 20);
-    tensor_t* p5 = yolov5s_get_saved_feature(model, 23);
+    tensor_t* p3 = yolov5n_get_saved_feature(model, 17);
+    tensor_t* p4 = yolov5n_get_saved_feature(model, 20);
+    tensor_t* p5 = yolov5n_get_saved_feature(model, 23);
     
     if (!p3 || !p4 || !p5) {
         printf("  ERROR: Failed to get saved features\n");
@@ -86,7 +86,7 @@ int test_model_build_and_forward() {
         tensor_free(outputs[1]);
         tensor_free(outputs[2]);
         tensor_free(input);
-        yolov5s_free(model);
+        yolov5n_free(model);
         return -1;
     }
     printf("  ✓ Saved features retrieved\n");
@@ -118,7 +118,7 @@ int test_model_build_and_forward() {
     tensor_free(outputs[1]);
     tensor_free(outputs[2]);
     tensor_free(input);
-    yolov5s_free(model);
+    yolov5n_free(model);
     
     printf("\n=== Integration test PASSED ===\n\n");
     return 0;

@@ -1,6 +1,8 @@
 #include "detect.h"
 #include "../ops/conv2d.h"
 #include "../ops/batchnorm2d.h"
+#include "../models/yolov5n_build.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -12,7 +14,7 @@ void detect_init_params(detect_params_t* params, int32_t num_classes, int32_t in
     params->num_anchors = 3;
     params->input_size = input_size;
     
-    // Default anchors for YOLOv5s (from model_meta.json)
+    // Default anchors for YOLOv5n (from model_meta.json)
     // P3: [10, 13, 16, 30, 33, 23]
     params->anchors[0][0] = 10.0f;   // anchor 0: w, h
     params->anchors[0][1] = 13.0f;
@@ -38,9 +40,11 @@ void detect_init_params(detect_params_t* params, int32_t num_classes, int32_t in
     params->anchors[2][5] = 326.0f;
 }
 
-int detect_forward(const tensor_t* p3_feature, const tensor_t* p4_feature, const tensor_t* p5_feature,
+int detect_forward(void* model_ptr, const tensor_t* p3_feature, const tensor_t* p4_feature, const tensor_t* p5_feature,
                    detect_output_t* output, const detect_params_t* params) {
-    if (!p3_feature || !p4_feature || !p5_feature || !output || !params) return -1;
+    if (!model_ptr || !p3_feature || !p4_feature || !p5_feature || !output || !params) return -1;
+    
+    yolov5n_model_t* model = (yolov5n_model_t*)model_ptr;
     
     int32_t num_outputs = 3 * (params->num_classes + 5);  // 3 anchors * (4 bbox + 1 obj + 80 cls) = 255
     
@@ -52,30 +56,45 @@ int detect_forward(const tensor_t* p3_feature, const tensor_t* p4_feature, const
     int32_t p5_h = p5_feature->h;
     int32_t p5_w = p5_feature->w;
     
-    // P3: (1, 128, H, W) -> (1, 255, H, W)
+    // P3: (1, 64, H, W) -> (1, 255, H, W) for YOLOv5n
     output->p3_output = tensor_create(1, num_outputs, p3_h, p3_w);
     if (!output->p3_output) return -1;
     
-    // TODO: Apply 1×1 conv (128 -> 255)
-    // For now, just create placeholder output
-    tensor_zero(output->p3_output);
+    if (conv2d_forward(&model->detect_convs[0].conv, p3_feature, output->p3_output) != 0) {
+        fprintf(stderr, "Error: Detect head P3 conv forward failed\n");
+        tensor_free(output->p3_output);
+        return -1;
+    }
     
-    // P4: (1, 256, H, W) -> (1, 255, H, W)
+    // P4: (1, 128, H, W) -> (1, 255, H, W) for YOLOv5n
     output->p4_output = tensor_create(1, num_outputs, p4_h, p4_w);
     if (!output->p4_output) {
         tensor_free(output->p3_output);
         return -1;
     }
-    tensor_zero(output->p4_output);
     
-    // P5: (1, 512, H, W) -> (1, 255, H, W)
+    if (conv2d_forward(&model->detect_convs[1].conv, p4_feature, output->p4_output) != 0) {
+        fprintf(stderr, "Error: Detect head P4 conv forward failed\n");
+        tensor_free(output->p3_output);
+        tensor_free(output->p4_output);
+        return -1;
+    }
+    
+    // P5: (1, 256, H, W) -> (1, 255, H, W) for YOLOv5n
     output->p5_output = tensor_create(1, num_outputs, p5_h, p5_w);
     if (!output->p5_output) {
         tensor_free(output->p3_output);
         tensor_free(output->p4_output);
         return -1;
     }
-    tensor_zero(output->p5_output);
+    
+    if (conv2d_forward(&model->detect_convs[2].conv, p5_feature, output->p5_output) != 0) {
+        fprintf(stderr, "Error: Detect head P5 conv forward failed\n");
+        tensor_free(output->p3_output);
+        tensor_free(output->p4_output);
+        tensor_free(output->p5_output);
+        return -1;
+    }
     
     return 0;
 }

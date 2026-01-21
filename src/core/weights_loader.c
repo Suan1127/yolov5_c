@@ -353,12 +353,30 @@ weights_loader_t* weights_loader_create(const char* weights_path) {
     fclose(fp);
     
     // Try to find weights_map.json in same directory
+    // First try to extract model type from weights filename (e.g., weights_yolov5n.bin -> weights_map_yolov5n.json)
     char map_path[1024];
     strncpy(map_path, weights_path, sizeof(map_path) - 1);
     char* last_slash = strrchr(map_path, '/');
     if (!last_slash) last_slash = strrchr(map_path, '\\');
+    
     if (last_slash) {
-        strcpy(last_slash + 1, "weights_map.json");
+        char* filename = last_slash + 1;
+        // Check if filename contains model type (e.g., weights_yolov5n.bin)
+        char* model_type_start = strstr(filename, "weights_");
+        if (model_type_start) {
+            // Extract model type (e.g., "yolov5n")
+            char model_type[64] = {0};
+            char* model_type_end = strstr(model_type_start + 8, ".bin");
+            if (model_type_end && (model_type_end - model_type_start - 8) < sizeof(model_type)) {
+                int len = model_type_end - model_type_start - 8;
+                strncpy(model_type, model_type_start + 8, len);
+                snprintf(last_slash + 1, sizeof(map_path) - (last_slash - map_path), "weights_map_%s.json", model_type);
+            } else {
+                strcpy(last_slash + 1, "weights_map.json");
+            }
+        } else {
+            strcpy(last_slash + 1, "weights_map.json");
+        }
     } else {
         strcpy(map_path, "weights_map.json");
     }

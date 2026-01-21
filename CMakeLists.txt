@@ -43,9 +43,9 @@ set(BLOCKS_SOURCES
 )
 
 set(MODELS_SOURCES
-    src/models/yolov5s_graph.c
-    src/models/yolov5s_build.c
-    src/models/yolov5s_infer.c
+    src/models/yolov5n_graph.c
+    src/models/yolov5n_build.c
+    src/models/yolov5n_infer.c
 )
 
 set(POSTPROCESS_SOURCES

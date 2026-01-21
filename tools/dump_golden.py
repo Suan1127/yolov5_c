@@ -48,6 +48,10 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
         print(f"Error: Input tensor file not found: {input_tensor_path}")
         return None
     
+    if input_tensor_path.is_dir():
+        print(f"Error: Input tensor path is a directory, not a file: {input_tensor_path}")
+        return None
+    
     print(f"Loading input tensor from {input_tensor_path}...")
     with open(input_tensor_path, 'rb') as f:
         dims = np.fromfile(f, dtype=np.int32, count=4)
@@ -102,6 +106,7 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
     # Hook to capture intermediate outputs
     outputs = {}
     handles = []
+    detect_conv_outputs = {}  # Store detect head conv outputs before reshape
     
     def make_hook(layer_idx):
         def hook(module, input, output):
@@ -114,6 +119,27 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
                         key = f"{layer_idx}_{i}"
                         outputs[key] = out.detach().cpu().numpy()
         return hook
+    
+    # Hook for Detect head conv outputs (before reshape)
+    # Detect head forward: x[i] = self.m[i](x[i]) -> (1, 255, ny, nx)
+    # We need to capture this conv output before reshape
+    def register_detect_hooks(model_modules):
+        """Register hooks on Detect head conv layers to capture (1, 255, H, W) outputs"""
+        detect_handles = []
+        for name, module in model_modules.named_modules():
+            if isinstance(module, torch.nn.Module) and hasattr(module, 'm') and isinstance(module.m, torch.nn.ModuleList):
+                # This is a Detect module
+                print(f"  Found Detect module at {name}, registering conv hooks...")
+                for i, conv in enumerate(module.m):
+                    def make_conv_hook(idx):
+                        def conv_hook(conv_module, conv_input, conv_output):
+                            # conv_output is (bs, 255, ny, nx) - this is what C saves!
+                            detect_conv_outputs[f"detect_conv_{idx}"] = conv_output.detach().cpu().numpy()
+                        return conv_hook
+                    handle = conv.register_forward_hook(make_conv_hook(i))
+                    detect_handles.append(handle)
+                    print(f"    Registered hook for detect conv {i}")
+        return detect_handles
     
     # Register hooks for save layers
     # YOLOv5 model structure: model.model is a Sequential container
@@ -168,6 +194,10 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
                                     break
                 except Exception as e:
                     pass
+        
+        # Register hooks for Detect head conv outputs
+        detect_handles = register_detect_hooks(model_modules)
+        handles.extend(detect_handles)
     
     # Run forward pass
     print("Running forward pass...")
@@ -207,12 +237,34 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
         print(f"  Final output: shape {output_np.shape} -> {output_path.name}")
         saved_count += 1
     elif isinstance(output, (list, tuple)):
+        # YOLOv5 Detect head returns: (torch.cat(z, 1), x) where:
+        # - output[0]: concatenated tensor (1, 25200, 85)
+        # - output[1]: list of 3 tensors [P3, P4, P5] before concatenation
         for i, out in enumerate(output):
             if isinstance(out, torch.Tensor):
                 output_path = output_dir / f"output_{i}.bin"
                 output_np = out.detach().cpu().numpy()
                 save_tensor_bin(output_np, output_path)
                 print(f"  Final output[{i}]: shape {output_np.shape} -> {output_path.name}")
+                saved_count += 1
+            elif isinstance(out, (list, tuple)):
+                # output[1] is list of reshaped tensors (1, 3, ny, nx, 85) - not what we want
+                # We'll use detect_conv_outputs instead
+                pass
+    
+    # Save Detect head conv outputs (for comparison with C implementation)
+    # These are (1, 255, H, W) tensors before reshape
+    if detect_conv_outputs:
+        print(f"\nSaving Detect head conv outputs...")
+        # Map: detect_conv_0 -> P3 (80x80), detect_conv_1 -> P4 (40x40), detect_conv_2 -> P5 (20x20)
+        for i in range(3):
+            key = f"detect_conv_{i}"
+            if key in detect_conv_outputs:
+                output_np = detect_conv_outputs[key]
+                # Save as output_1_0.bin, output_1_1.bin, output_1_2.bin to match C naming
+                output_path = output_dir / f"output_1_{i}.bin"
+                save_tensor_bin(output_np, output_path)
+                print(f"  Detect conv {i}: shape {output_np.shape} -> {output_path.name}")
                 saved_count += 1
     
     # Save metadata
@@ -236,8 +288,8 @@ def main():
     parser.add_argument('model', type=str, help='Path to yolov5s.pt')
     parser.add_argument('input', type=str, 
                         help='Path to input tensor .bin file or image name (e.g., "bus")')
-    parser.add_argument('--output', type=str, default='testdata/python', 
-                        help='Output directory (default: testdata/python)')
+    parser.add_argument('--output', type=str, default='testdata_n/python', 
+                        help='Output directory (default: testdata_n/python)')
     parser.add_argument('--layers', type=int, nargs='+', default=None,
                         help='Layer indices to save (default: all layers 0-23)')
     
@@ -246,14 +298,24 @@ def main():
     # Resolve input tensor path
     input_path = Path(args.input)
     
-    # If input doesn't exist, try to find it as image name
-    if not input_path.exists():
+    # Check if input_path is a directory (should not be)
+    if input_path.exists() and input_path.is_dir():
+        print(f"Error: Input path is a directory, not a file: {input_path}")
+        print(f"  Please provide a file path or image name (e.g., 'bus' or 'data/inputs/bus.bin')")
+        return 1
+    
+    # If input doesn't exist as a file, try to find it as image name
+    if not input_path.exists() or input_path.is_dir():
         # Try as image name (without extension)
         image_name = input_path.stem if input_path.suffix else args.input
         
-        # Search in multiple locations
+        # Search in multiple locations (including YOLOv5n paths)
         search_paths = [
+            Path('data/yolov5n/inputs') / f"{image_name}.bin",
+            Path('data/yolov5s/inputs') / f"{image_name}.bin",
             Path('data/inputs') / f"{image_name}.bin",
+            Path('testdata_n/python') / f"{image_name}.bin",
+            Path('testdata_n/c') / f"{image_name}.bin",
             Path('testdata/python') / f"{image_name}.bin",
             Path('testdata/c') / f"{image_name}.bin",
             Path(args.output) / f"{image_name}.bin",
@@ -261,7 +323,7 @@ def main():
         
         found = False
         for search_path in search_paths:
-            if search_path.exists():
+            if search_path.exists() and search_path.is_file():
                 input_path = search_path
                 found = True
                 print(f"Found input tensor: {input_path}")
@@ -274,6 +336,10 @@ def main():
                 print(f"    - {search_path.parent}")
             return 1
     else:
+        # Verify it's actually a file
+        if not input_path.is_file():
+            print(f"Error: Input path exists but is not a file: {input_path}")
+            return 1
         print(f"Using input tensor: {input_path}")
     
     metadata = dump_layer_outputs(args.model, str(input_path), args.output, args.layers)

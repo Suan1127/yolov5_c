@@ -44,14 +44,15 @@ void detect_init_params(detect_params_t* params, int32_t num_classes, int32_t in
 
 /**
  * Forward pass: Apply 1×1 conv to P3, P4, P5 features
- * @param p3_feature Input from layer 17 (1, 128, 80, 80)
- * @param p4_feature Input from layer 20 (1, 256, 40, 40)
- * @param p5_feature Input from layer 23 (1, 512, 20, 20)
+ * @param model Model instance (contains detect head conv layers)
+ * @param p3_feature Input from layer 17 (1, 64, 80, 80) for YOLOv5n
+ * @param p4_feature Input from layer 20 (1, 128, 40, 40) for YOLOv5n
+ * @param p5_feature Input from layer 23 (1, 256, 20, 20) for YOLOv5n
  * @param output Output tensors (will be allocated)
  * @param params Detect parameters
  * @return 0 on success, -1 on failure
  */
-int detect_forward(const tensor_t* p3_feature, const tensor_t* p4_feature, const tensor_t* p5_feature,
+int detect_forward(void* model, const tensor_t* p3_feature, const tensor_t* p4_feature, const tensor_t* p5_feature,
                    detect_output_t* output, const detect_params_t* params);
 
 /**

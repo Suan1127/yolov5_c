@@ -3,12 +3,16 @@
 #include <string.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <direct.h>
+#define mkdir(path, mode) _mkdir(path)
 #else
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #endif
 #include "core/tensor.h"
-#include "models/yolov5s_build.h"
-#include "models/yolov5s_infer.h"
+#include "models/yolov5n_build.h"
+#include "models/yolov5n_infer.h"
 #include "postprocess/detect.h"
 #include "postprocess/nms.h"
 
@@ -18,8 +22,8 @@ void print_usage(const char* prog_name) {
     printf("Arguments:\n");
     printf("  image_name        Image name (without extension, e.g., 'bus')\n");
     printf("                    Input tensor will be loaded from: data/inputs/<image_name>.bin\n");
-    printf("  weights.bin       Model weights file (default: weights/weights.bin)\n");
-    printf("  model_meta.json   Model metadata (default: weights/model_meta.json)\n");
+    printf("  weights.bin       Model weights file (default: weights/yolov5n/weights_yolov5n.bin)\n");
+    printf("  model_meta.json   Model metadata (default: weights/yolov5n/model_meta_yolov5n.json)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s bus\n", prog_name);
@@ -39,9 +43,13 @@ int main(int argc, char* argv[]) {
     const char* weights_path_arg = (argc >= 3) ? argv[2] : NULL;
     const char* model_meta_path_arg = (argc >= 4) ? argv[3] : NULL;
     
-    // Construct input tensor path: data/inputs/<image_name>.bin
-    char input_tensor_path[512];
-    snprintf(input_tensor_path, sizeof(input_tensor_path), "data/inputs/%s.bin", image_name);
+    // Construct input tensor path: try multiple locations
+    // Try data/yolov5n/inputs/ first (YOLOv5n), then data/inputs/ as fallback
+    char input_tensor_paths[4][512];
+    snprintf(input_tensor_paths[0], sizeof(input_tensor_paths[0]), "data/yolov5n/inputs/%s.bin", image_name);
+    snprintf(input_tensor_paths[1], sizeof(input_tensor_paths[1]), "../data/yolov5n/inputs/%s.bin", image_name);
+    snprintf(input_tensor_paths[2], sizeof(input_tensor_paths[2]), "../../data/yolov5n/inputs/%s.bin", image_name);
+    snprintf(input_tensor_paths[3], sizeof(input_tensor_paths[3]), "data/inputs/%s.bin", image_name);  // Fallback
     
     printf("=== YOLOv5 C Inference ===\n\n");
     printf("Image name: %s\n", image_name);
@@ -50,14 +58,15 @@ int main(int argc, char* argv[]) {
     // Load input tensor
     printf("Loading input tensor...\n");
     
-    // Try multiple path variations
-    char paths[3][512];
-    snprintf(paths[0], sizeof(paths[0]), "data/inputs/%s.bin", image_name);
-    snprintf(paths[1], sizeof(paths[1]), "../data/inputs/%s.bin", image_name);
-    snprintf(paths[2], sizeof(paths[2]), "../../data/inputs/%s.bin", image_name);
+    // Try multiple path variations (YOLOv5n first, then fallback)
+    char paths[4][512];
+    snprintf(paths[0], sizeof(paths[0]), "data/yolov5n/inputs/%s.bin", image_name);
+    snprintf(paths[1], sizeof(paths[1]), "../data/yolov5n/inputs/%s.bin", image_name);
+    snprintf(paths[2], sizeof(paths[2]), "../../data/yolov5n/inputs/%s.bin", image_name);
+    snprintf(paths[3], sizeof(paths[3]), "data/inputs/%s.bin", image_name);  // Fallback
     
     const char* found_path = NULL;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         FILE* test_fp = fopen(paths[i], "rb");
         if (test_fp) {
             fclose(test_fp);
@@ -69,7 +78,7 @@ int main(int argc, char* argv[]) {
     if (!found_path) {
         fprintf(stderr, "Error: Cannot find input tensor file\n");
         fprintf(stderr, "Tried:\n");
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             fprintf(stderr, "  - %s\n", paths[i]);
         }
         #ifdef _WIN32
@@ -121,9 +130,10 @@ int main(int argc, char* argv[]) {
         snprintf(weights_paths[1], sizeof(weights_paths[1]), "../%s", weights_path_arg);
         snprintf(weights_paths[2], sizeof(weights_paths[2]), "../../%s", weights_path_arg);
     } else {
-        snprintf(weights_paths[0], sizeof(weights_paths[0]), "weights/weights.bin");
-        snprintf(weights_paths[1], sizeof(weights_paths[1]), "../weights/weights.bin");
-        snprintf(weights_paths[2], sizeof(weights_paths[2]), "../../weights/weights.bin");
+        // Default to YOLOv5n weights
+        snprintf(weights_paths[0], sizeof(weights_paths[0]), "weights/yolov5n/weights_yolov5n.bin");
+        snprintf(weights_paths[1], sizeof(weights_paths[1]), "../weights/yolov5n/weights_yolov5n.bin");
+        snprintf(weights_paths[2], sizeof(weights_paths[2]), "../../weights/yolov5n/weights_yolov5n.bin");
     }
     
     const char* found_weights_path = NULL;
@@ -155,9 +165,10 @@ int main(int argc, char* argv[]) {
         snprintf(meta_paths[1], sizeof(meta_paths[1]), "../%s", model_meta_path_arg);
         snprintf(meta_paths[2], sizeof(meta_paths[2]), "../../%s", model_meta_path_arg);
     } else {
-        snprintf(meta_paths[0], sizeof(meta_paths[0]), "weights/model_meta.json");
-        snprintf(meta_paths[1], sizeof(meta_paths[1]), "../weights/model_meta.json");
-        snprintf(meta_paths[2], sizeof(meta_paths[2]), "../../weights/model_meta.json");
+        // Default to YOLOv5n metadata
+        snprintf(meta_paths[0], sizeof(meta_paths[0]), "weights/yolov5n/model_meta_yolov5n.json");
+        snprintf(meta_paths[1], sizeof(meta_paths[1]), "../weights/yolov5n/model_meta_yolov5n.json");
+        snprintf(meta_paths[2], sizeof(meta_paths[2]), "../../weights/yolov5n/model_meta_yolov5n.json");
     }
     
     const char* found_meta_path = NULL;
@@ -182,8 +193,8 @@ int main(int argc, char* argv[]) {
     printf("\n");
     
     // Build model
-    printf("Building YOLOv5s model...\n");
-    yolov5s_model_t* model = yolov5s_build(found_weights_path, found_meta_path);
+    printf("Building YOLOv5n model...\n");
+    yolov5n_model_t* model = yolov5n_build(found_weights_path, found_meta_path);
     if (!model) {
         fprintf(stderr, "Error: Failed to build model\n");
         fprintf(stderr, "Check if weights file is valid: %s\n", found_weights_path);
@@ -195,27 +206,27 @@ int main(int argc, char* argv[]) {
     // Allocate output tensors
     printf("\nAllocating output tensors...\n");
     tensor_t* outputs[3];
-    outputs[0] = tensor_create(1, 128, 80, 80);   // P3
-    outputs[1] = tensor_create(1, 256, 40, 40);   // P4
-    outputs[2] = tensor_create(1, 512, 20, 20);   // P5
+    outputs[0] = tensor_create(1, 64, 80, 80);   // P3 for YOLOv5n
+    outputs[1] = tensor_create(1, 128, 40, 40);   // P4 for YOLOv5n
+    outputs[2] = tensor_create(1, 256, 20, 20);   // P5 for YOLOv5n
     
     if (!outputs[0] || !outputs[1] || !outputs[2]) {
         fprintf(stderr, "Error: Failed to allocate output tensors\n");
-        yolov5s_free(model);
+        yolov5n_free(model);
         tensor_free(input);
         return 1;
     }
     
     // Set output directory for saving intermediate layer tensors (for validation)
     // Only save intermediate tensors to testdata/c/, not final detection results
-    // Final detection results are saved to data/outputs/ in the detection section below
+    // Final detection results are saved to data/yolov5n/outputs/ in the detection section below
     const char* output_dir = NULL;
     
-    // Try multiple paths for testdata/c directory
+    // Try multiple paths for testdata_n/c directory (YOLOv5n)
     const char* test_paths[] = {
-        "testdata/c",
-        "../testdata/c",
-        "../../testdata/c"
+        "testdata_n/c",
+        "../testdata_n/c",
+        "../../testdata_n/c"
     };
     
     #ifdef _WIN32
@@ -229,7 +240,7 @@ int main(int argc, char* argv[]) {
         DWORD attrs = GetFileAttributesA(win_path);
         if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
             output_dir = test_paths[i];
-            printf("Found testdata/c directory: %s\n", output_dir);
+            printf("Found testdata_n/c directory: %s\n", output_dir);
             break;
         }
     }
@@ -237,23 +248,23 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < 3; i++) {
         if (access(test_paths[i], F_OK) == 0) {
             output_dir = test_paths[i];
-            printf("Found testdata/c directory: %s\n", output_dir);
+            printf("Found testdata_n/c directory: %s\n", output_dir);
             break;
         }
     }
     #endif
     
     // Always try to set output directory (will create if doesn't exist)
-    // Default to testdata/c
+    // Default to testdata_n/c for YOLOv5n
     if (!output_dir) {
-        output_dir = "testdata/c";
+        output_dir = "testdata_n/c";
         printf("Setting default output directory: %s (will be created if needed)\n", output_dir);
     }
     
-    int set_dir_ret = yolov5s_set_output_dir(model, output_dir);
+    int set_dir_ret = yolov5n_set_output_dir(model, output_dir);
     if (set_dir_ret == 0) {
         printf("Intermediate layer output directory set to: %s\n", output_dir);
-        printf("(Final detection results will be saved to data/outputs/)\n");
+        printf("(Final detection results will be saved to data/yolov5n/outputs/)\n");
     } else {
         fprintf(stderr, "Warning: Failed to set output directory: %s\n", output_dir);
     }
@@ -263,7 +274,7 @@ int main(int argc, char* argv[]) {
     printf("This may take a while...\n");
     fflush(stdout);  // Ensure output is flushed
     
-    int ret = yolov5s_forward(model, input, outputs);
+    int ret = yolov5n_forward(model, input, outputs);
     if (ret != 0) {
         fprintf(stderr, "\nError: Forward pass failed (return code: %d)\n", ret);
         fprintf(stderr, "Possible causes:\n");
@@ -273,7 +284,7 @@ int main(int argc, char* argv[]) {
         tensor_free(outputs[0]);
         tensor_free(outputs[1]);
         tensor_free(outputs[2]);
-        yolov5s_free(model);
+        yolov5n_free(model);
         tensor_free(input);
         return 1;
     }
@@ -283,16 +294,16 @@ int main(int argc, char* argv[]) {
     printf("P5 output: (%d, %d, %d, %d)\n", outputs[2]->n, outputs[2]->c, outputs[2]->h, outputs[2]->w);
     
     // Get P3, P4, P5 features for Detect head
-    tensor_t* p3_feature = yolov5s_get_saved_feature(model, 17);
-    tensor_t* p4_feature = yolov5s_get_saved_feature(model, 20);
-    tensor_t* p5_feature = yolov5s_get_saved_feature(model, 23);
+    tensor_t* p3_feature = yolov5n_get_saved_feature(model, 17);
+    tensor_t* p4_feature = yolov5n_get_saved_feature(model, 20);
+    tensor_t* p5_feature = yolov5n_get_saved_feature(model, 23);
     
     if (!p3_feature || !p4_feature || !p5_feature) {
         fprintf(stderr, "Error: Failed to get detect features\n");
         tensor_free(outputs[0]);
         tensor_free(outputs[1]);
         tensor_free(outputs[2]);
-        yolov5s_free(model);
+        yolov5n_free(model);
         tensor_free(input);
         return 1;
     }
@@ -306,17 +317,51 @@ int main(int argc, char* argv[]) {
     printf("Using input size: %d for detection (from input %dx%d)\n", input_size, input_h, input_w);
     
     detect_output_t detect_output;
-    ret = detect_forward(p3_feature, p4_feature, p5_feature, &detect_output, &detect_params);
+    ret = detect_forward(model, p3_feature, p4_feature, p5_feature, &detect_output, &detect_params);
     if (ret != 0) {
         fprintf(stderr, "Error: Detect forward failed\n");
         tensor_free(outputs[0]);
         tensor_free(outputs[1]);
         tensor_free(outputs[2]);
-        yolov5s_free(model);
+        yolov5n_free(model);
         tensor_free(input);
         return 1;
     }
     printf("Detect head completed\n");
+    
+    // Save detect head outputs to testdata_n/c (for comparison with Python)
+    // Python saves as output_1_0.bin (P3), output_1_1.bin (P4), output_1_2.bin (P5)
+    // because output[1] is the list of 3 tensors [P3, P4, P5]
+    if (output_dir && strlen(output_dir) > 0) {
+        char filepath[512];
+        printf("\nSaving detect head outputs...\n");
+        
+        // Save P3 detect output as output_1_0.bin (to match Python)
+        snprintf(filepath, sizeof(filepath), "%s/output_1_0.bin", output_dir);
+        if (tensor_dump(detect_output.p3_output, filepath) == 0) {
+            printf("  Saved P3 detect output to %s\n", filepath);
+        }
+        
+        // Save P4 detect output as output_1_1.bin (to match Python)
+        snprintf(filepath, sizeof(filepath), "%s/output_1_1.bin", output_dir);
+        if (tensor_dump(detect_output.p4_output, filepath) == 0) {
+            printf("  Saved P4 detect output to %s\n", filepath);
+        }
+        
+        // Save P5 detect output as output_1_2.bin (to match Python)
+        snprintf(filepath, sizeof(filepath), "%s/output_1_2.bin", output_dir);
+        if (tensor_dump(detect_output.p5_output, filepath) == 0) {
+            printf("  Saved P5 detect output to %s\n", filepath);
+        }
+        
+        // Also save as output_0.bin, output_1.bin, output_2.bin for backward compatibility
+        snprintf(filepath, sizeof(filepath), "%s/output_0.bin", output_dir);
+        tensor_dump(detect_output.p3_output, filepath);
+        snprintf(filepath, sizeof(filepath), "%s/output_1.bin", output_dir);
+        tensor_dump(detect_output.p4_output, filepath);
+        snprintf(filepath, sizeof(filepath), "%s/output_2.bin", output_dir);
+        tensor_dump(detect_output.p5_output, filepath);
+    }
     
     // Decode detections
     printf("\nDecoding detections...\n");
@@ -331,7 +376,7 @@ int main(int argc, char* argv[]) {
         tensor_free(outputs[0]);
         tensor_free(outputs[1]);
         tensor_free(outputs[2]);
-        yolov5s_free(model);
+        yolov5n_free(model);
         tensor_free(input);
         return 1;
     }
@@ -352,7 +397,7 @@ int main(int argc, char* argv[]) {
         tensor_free(outputs[0]);
         tensor_free(outputs[1]);
         tensor_free(outputs[2]);
-        yolov5s_free(model);
+        yolov5n_free(model);
         tensor_free(input);
         return 1;
     }
@@ -379,15 +424,33 @@ int main(int argc, char* argv[]) {
     // Save results to file
     printf("\nSaving results...\n");
     
-    // Try multiple output paths
+    // Try multiple output paths (YOLOv5n)
     char output_paths[3][512];
-    snprintf(output_paths[0], sizeof(output_paths[0]), "data/outputs/%s_detections.txt", image_name);
-    snprintf(output_paths[1], sizeof(output_paths[1]), "../data/outputs/%s_detections.txt", image_name);
-    snprintf(output_paths[2], sizeof(output_paths[2]), "../../data/outputs/%s_detections.txt", image_name);
+    snprintf(output_paths[0], sizeof(output_paths[0]), "data/yolov5n/outputs/%s_detections.txt", image_name);
+    snprintf(output_paths[1], sizeof(output_paths[1]), "../data/yolov5n/outputs/%s_detections.txt", image_name);
+    snprintf(output_paths[2], sizeof(output_paths[2]), "../../data/yolov5n/outputs/%s_detections.txt", image_name);
     
     FILE* fp = NULL;
     const char* saved_path = NULL;
     for (int i = 0; i < 3; i++) {
+        // Create directory if it doesn't exist
+        char dir_path[512];
+        strncpy(dir_path, output_paths[i], sizeof(dir_path) - 1);
+        dir_path[sizeof(dir_path) - 1] = '\0';
+        char* last_slash = strrchr(dir_path, '/');
+        if (!last_slash) last_slash = strrchr(dir_path, '\\');
+        if (last_slash) {
+            *last_slash = '\0';
+            // Try to create directory (will fail silently if exists)
+            #ifdef _WIN32
+            // Convert / to \ for Windows
+            for (int j = 0; dir_path[j]; j++) {
+                if (dir_path[j] == '/') dir_path[j] = '\\';
+            }
+            #endif
+            mkdir(dir_path, 0755);
+        }
+        
         fp = fopen(output_paths[i], "w");
         if (fp) {
             saved_path = output_paths[i];
@@ -428,7 +491,7 @@ int main(int argc, char* argv[]) {
     tensor_free(outputs[0]);
     tensor_free(outputs[1]);
     tensor_free(outputs[2]);
-    yolov5s_free(model);
+    yolov5n_free(model);
     tensor_free(input);
     
     printf("\n=== Inference completed successfully ===\n");

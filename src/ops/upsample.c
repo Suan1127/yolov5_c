@@ -1,4 +1,5 @@
 #include "upsample.h"
+#include <stdio.h>
 #include <string.h>
 
 int upsample_forward(const upsample_params_t* params, const tensor_t* input, tensor_t* output) {
@@ -11,6 +12,10 @@ int upsample_forward(const upsample_params_t* params, const tensor_t* input, ten
     // Output size should be 2x input size
     if (output->n != input->n || output->c != input->c ||
         output->h != input->h * 2 || output->w != input->w * 2) {
+        fprintf(stderr, "Error: upsample_forward: Size mismatch\n");
+        fprintf(stderr, "  Input: (%d, %d, %d, %d)\n", input->n, input->c, input->h, input->w);
+        fprintf(stderr, "  Output: (%d, %d, %d, %d)\n", output->n, output->c, output->h, output->w);
+        fprintf(stderr, "  Expected output: (%d, %d, %d, %d)\n", input->n, input->c, input->h * 2, input->w * 2);
         return -1;
     }
     
