@@ -300,9 +300,6 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     printf("    Layer 2: C3(64->64, n=1)...\n");
     fflush(stdout);
     
-    // Enable debug output for Layer 2 only
-    c3_set_debug_dir("debug/c");
-    
     // After swap: buf_a = Layer 1 output (64 channels, l1_h x l1_w), buf_b = Layer 0 output (32 channels)
     // For C3(32->32), we need output with 32 channels (same spatial size) for YOLOv5n
     tensor_free(buf_b);
@@ -319,9 +316,6 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         fprintf(stderr, "Error: C3 forward failed at Layer 2\n");
         goto error;
     }
-    
-    // Disable debug output after Layer 2
-    c3_set_debug_dir(NULL);
     
     save_feature(model, 2, buf_b);
     printf("    Layer 2 completed\n");
@@ -494,17 +488,10 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     printf("    Layer 9: SPPF(512->512, k=5)...\n");
     fflush(stdout);
     
-    // Enable debug output for Layer 9 only
-    sppf_set_debug_dir("debug/c");
-    
     if (sppf_forward(&model->sppf, buf_a, buf_b, NULL, NULL, NULL) != 0) {
         fprintf(stderr, "Error: SPPF forward failed at Layer 9\n");
-        sppf_set_debug_dir(NULL);
         goto error;
     }
-    
-    // Disable debug output after Layer 9
-    sppf_set_debug_dir(NULL);
     
     save_feature(model, 9, buf_b);
     printf("    Layer 9 completed\n");

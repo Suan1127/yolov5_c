@@ -160,7 +160,7 @@ def compare_directories(golden_dir, test_dir, tolerance=1e-4):
                     print(f"SKIP {filename}: Output file (optional)")
                     results[filename] = None
             elif filename == "bus.bin" or filename.endswith("_bus.bin"):
-                print(f"SKIP {filename}: Input image file (optional)")
+                # Skip bus.bin silently (don't print message)
                 results[filename] = None
             else:
                 print(f"MISSING {filename}: Not found in test directory")

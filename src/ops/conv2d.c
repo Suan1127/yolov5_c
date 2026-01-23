@@ -136,7 +136,9 @@ int conv2d_forward(const conv2d_layer_t* layer, const tensor_t* input, tensor_t*
     } else {
         // General convolution (3x3, 6x6, etc.)
         // output[b, oc, oh, ow] = sum(ic, kh, kw) input[b, ic, ih, iw] * weight[oc, ic, kh, kw]
-        // where ih = oh * s + kh - p, iw = ow * s + kw - p
+        // where ih = oh * s + kh * dilation - p, iw = ow * s + kw * dilation - p
+        
+        int32_t d = layer->params.dilation;
         
         for (int32_t b = 0; b < input->n; b++) {
             for (int32_t oc = 0; oc < layer->params.out_channels; oc++) {
@@ -147,8 +149,8 @@ int conv2d_forward(const conv2d_layer_t* layer, const tensor_t* input, tensor_t*
                         for (int32_t ic = 0; ic < layer->in_channels; ic++) {
                             for (int32_t kh = 0; kh < k; kh++) {
                                 for (int32_t kw = 0; kw < k; kw++) {
-                                    int32_t ih = oh * s + kh - p;
-                                    int32_t iw = ow * s + kw - p;
+                                    int32_t ih = oh * s + kh * d - p;
+                                    int32_t iw = ow * s + kw * d - p;
                                     
                                     // Check bounds
                                     if (ih >= 0 && ih < input->h && iw >= 0 && iw < input->w) {

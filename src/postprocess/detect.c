@@ -189,24 +189,38 @@ int detect_decode(const detect_output_t* output, const detect_params_t* params,
                     // Apply confidence threshold
                     if (conf < conf_threshold) continue;
                     
-                    // Decode bbox coordinates
-                    // YOLOv5 uses: bbox = sigmoid(tx, ty) + grid_offset, exp(tw, th) * anchor
+                    // Decode bbox coordinates (YOLOv5 new format)
+                    // Python: xy = (xy * 2 + grid) * stride, wh = (wh * 2) ** 2 * anchor_grid
+                    // where grid = (x, y) - 0.5, anchor_grid = (anchors / stride) * stride = anchors
+                    // Note: In Python, anchors are normalized by stride first, then multiplied by stride for anchor_grid
+                    // In C, anchors are stored in pixel units, so anchor_grid = anchors (no normalization needed)
                     float anchor_w = anchors[a * 2];
                     float anchor_h = anchors[a * 2 + 1];
                     
-                    // Apply sigmoid to x, y
+                    // Apply sigmoid to x, y, w, h
                     float tx = 1.0f / (1.0f + expf(-bx));
                     float ty = 1.0f / (1.0f + expf(-by));
+                    float tw_sigmoid = 1.0f / (1.0f + expf(-bw));
+                    float th_sigmoid = 1.0f / (1.0f + expf(-bh));
                     
-                    // Decode: center = (grid + sigmoid(tx, ty)) * stride
-                    temp_detections[count].x = (x + tx) * stride / params->input_size;
-                    temp_detections[count].y = (y + ty) * stride / params->input_size;
+                    // Decode: xy = (sigmoid(xy) * 2 + grid) * stride
+                    // grid = (x, y) - 0.5 (YOLOv5 format)
+                    float grid_x = (float)x - 0.5f;
+                    float grid_y = (float)y - 0.5f;
+                    float decoded_x = (tx * 2.0f + grid_x) * stride;
+                    float decoded_y = (ty * 2.0f + grid_y) * stride;
                     
-                    // Decode: size = exp(tw, th) * anchor / input_size
-                    float tw = expf(bw);
-                    float th = expf(bh);
-                    temp_detections[count].w = (tw * anchor_w) / params->input_size;
-                    temp_detections[count].h = (th * anchor_h) / params->input_size;
+                    // Decode: wh = (sigmoid(wh) * 2) ** 2 * anchor_grid
+                    // anchor_grid = anchors (in pixel units, matching Python's normalized anchors * stride)
+                    // In Python: anchor_grid = (anchors / stride) * stride = anchors (pixel units)
+                    float decoded_w = (tw_sigmoid * 2.0f) * (tw_sigmoid * 2.0f) * anchor_w;
+                    float decoded_h = (th_sigmoid * 2.0f) * (th_sigmoid * 2.0f) * anchor_h;
+                    
+                    // Normalize to 0-1 range
+                    temp_detections[count].x = decoded_x / params->input_size;
+                    temp_detections[count].y = decoded_y / params->input_size;
+                    temp_detections[count].w = decoded_w / params->input_size;
+                    temp_detections[count].h = decoded_h / params->input_size;
                     
                     temp_detections[count].conf = conf;
                     temp_detections[count].cls_id = max_cls_id;

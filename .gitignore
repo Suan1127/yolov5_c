@@ -32,6 +32,8 @@ weights/*.bin
 # Test outputs
 tests/output/
 *.log
+testdata_n/
+debug/
 build/ 
 *.vcxproj 
 *.vcxproj.filters 

@@ -49,17 +49,9 @@ int nms(detection_t* detections, int32_t num_detections,
     *output_detections = NULL;
     *output_count = 0;
     
-    // Sort detections by confidence (descending)
-    // Simple bubble sort for now (can be optimized)
-    for (int i = 0; i < num_detections - 1; i++) {
-        for (int j = i + 1; j < num_detections; j++) {
-            if (detections[i].conf < detections[j].conf) {
-                detection_t temp = detections[i];
-                detections[i] = detections[j];
-                detections[j] = temp;
-            }
-        }
-    }
+    // Note: Detections should already be sorted by confidence (descending) before calling this function
+    // This matches Python's behavior: x = x[x[:, 4].argsort(descending=True)[:max_nms]]
+    // Then torchvision.ops.nms is called on the already-sorted array
     
     // Track which detections to keep
     int* keep = (int*)calloc(num_detections, sizeof(int));

@@ -1,6 +1,6 @@
 # YOLOv5 C 포팅 프로젝트
 
-YOLOv5s 모델을 Python/PyTorch에서 순수 C로 포팅하여 임베디드/엣지 디바이스에서 실행 가능하도록 구현한 프로젝트입니다.
+YOLOv5n 모델을 Python/PyTorch에서 순수 C로 포팅하여 임베디드/엣지 디바이스에서 실행 가능하도록 구현한 프로젝트입니다.
 
 ## 📋 목차
 
@@ -19,12 +19,12 @@ YOLOv5s 모델을 Python/PyTorch에서 순수 C로 포팅하여 임베디드/엣
 ## 프로젝트 개요
 
 ### 목적
-- YOLOv5s 모델을 PyTorch에서 순수 C로 완전히 포팅
+- YOLOv5n 모델을 PyTorch에서 순수 C로 완전히 포팅
 - PyTorch 구현과 수치적으로 동일한 결과 보장 (레이어별 검증 완료)
 - 임베디드/엣지 디바이스에서 실행 가능한 경량 구현
 
 ### 주요 특징
-- ✅ **완전한 YOLOv5s 구현**: Backbone (10 layers) + Head (14 layers) + Detect (1 layer) = 총 25개 레이어
+- ✅ **완전한 YOLOv5n 구현**: Backbone (10 layers) + Head (14 layers) + Detect (1 layer) = 총 25개 레이어
 - ✅ **동적 입력 크기 지원**: 640×640 외 다양한 입력 크기 처리
 - ✅ **Cross-platform**: Windows/MSVC 및 Linux/GCC 지원
 - ✅ **메모리 효율적**: Arena allocator 및 ping-pong 버퍼 사용
@@ -46,9 +46,9 @@ YOLOv5s 모델을 Python/PyTorch에서 순수 C로 포팅하여 임베디드/엣
                         ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Model Layer                               │
-│  - yolov5s_build.c: 모델 초기화 및 가중치 로드              │
-│  - yolov5s_infer.c: Forward pass 파이프라인                 │
-│  - yolov5s_graph.c: 레이어 그래프 정의                      │
+│  - yolov5n_build.c: 모델 초기화 및 가중치 로드              │
+│  - yolov5n_infer.c: Forward pass 파이프라인                 │
+│  - yolov5n_graph.c: 레이어 그래프 정의                      │
 └───────────────────────┬─────────────────────────────────────┘
                         │
                         ▼
@@ -89,32 +89,32 @@ YOLOv5s 모델을 Python/PyTorch에서 순수 C로 포팅하여 임베디드/엣
 ### 모델 구조 (25개 레이어)
 
 **Backbone (Layers 0-9):**
-- Layer 0: Conv(3→32, 6×6, s=2) → (1,32,320,320)
-- Layer 1: Conv(32→64, 3×3, s=2) → (1,64,160,160)
-- Layer 2: C3(64→64, n=1) → (1,64,160,160)
-- Layer 3: Conv(64→128, 3×3, s=2) → (1,128,80,80)
-- Layer 4: C3(128→128, n=2) → (1,128,80,80)
-- Layer 5: Conv(128→256, 3×3, s=2) → (1,256,40,40)
-- Layer 6: C3(256→256, n=3) → (1,256,40,40)
-- Layer 7: Conv(256→512, 3×3, s=2) → (1,512,20,20)
-- Layer 8: C3(512→512, n=1) → (1,512,20,20)
-- Layer 9: SPPF(512→512) → (1,512,20,20)
+- Layer 0: Conv(3→16, 6×6, s=2) → (1,16,320,320)
+- Layer 1: Conv(16→32, 3×3, s=2) → (1,32,160,160)
+- Layer 2: C3(32→32, n=1) → (1,32,160,160)
+- Layer 3: Conv(32→64, 3×3, s=2) → (1,64,80,80)
+- Layer 4: C3(64→64, n=2) → (1,64,80,80)
+- Layer 5: Conv(64→128, 3×3, s=2) → (1,128,40,40)
+- Layer 6: C3(128→128, n=3) → (1,128,40,40)
+- Layer 7: Conv(128→256, 3×3, s=2) → (1,256,20,20)
+- Layer 8: C3(256→256, n=1) → (1,256,20,20)
+- Layer 9: SPPF(256→256) → (1,256,20,20)
 
 **Head (Layers 10-23):**
-- Layer 10: Conv(512→256, 1×1) → (1,256,20,20)
-- Layer 11: Upsample(×2) → (1,256,40,40)
-- Layer 12: Concat([Layer 6, Layer 11]) → (1,512,40,40)
-- Layer 13: C3(512→256, n=1) → (1,256,40,40)
-- Layer 14: Conv(256→128, 1×1) → (1,128,40,40)
-- Layer 15: Upsample(×2) → (1,128,80,80)
-- Layer 16: Concat([Layer 4, Layer 15]) → (1,256,80,80)
-- Layer 17: C3(256→128, n=1) → (1,128,80,80) → **P3**
-- Layer 18: Conv(128→128, 3×3, s=2) → (1,128,40,40)
-- Layer 19: Concat([Layer 13, Layer 18]) → (1,384,40,40)
-- Layer 20: C3(384→256, n=1) → (1,256,40,40) → **P4**
-- Layer 21: Conv(256→256, 3×3, s=2) → (1,256,20,20)
-- Layer 22: Concat([Layer 9, Layer 21]) → (1,768,20,20)
-- Layer 23: C3(768→512, n=1) → (1,512,20,20) → **P5**
+- Layer 10: Conv(256→128, 1×1) → (1,128,20,20)
+- Layer 11: Upsample(×2) → (1,128,40,40)
+- Layer 12: Concat([Layer 6, Layer 11]) → (1,256,40,40)
+- Layer 13: C3(256→128, n=1) → (1,128,40,40)
+- Layer 14: Conv(128→64, 1×1) → (1,64,40,40)
+- Layer 15: Upsample(×2) → (1,64,80,80)
+- Layer 16: Concat([Layer 4, Layer 15]) → (1,128,80,80)
+- Layer 17: C3(128→64, n=1) → (1,64,80,80) → **P3**
+- Layer 18: Conv(64→64, 3×3, s=2) → (1,64,40,40)
+- Layer 19: Concat([Layer 13, Layer 18]) → (1,128,40,40)
+- Layer 20: C3(128→128, n=1) → (1,128,40,40) → **P4**
+- Layer 21: Conv(128→128, 3×3, s=2) → (1,128,20,20)
+- Layer 22: Concat([Layer 10, Layer 21]) → (1,256,20,20)
+- Layer 23: C3(256→256, n=1) → (1,256,20,20) → **P5**
 
 **Detect (Layer 24):**
 - P3, P4, P5를 입력으로 받아 최종 검출 결과 출력
@@ -177,18 +177,18 @@ YOLO_c/
 │   │                             # - Fused BN 지원 (cv1, cv2)
 │   │
 │   ├── models/                   # 모델 레벨
-│   │   ├── yolov5s_graph.h/c     # 모델 그래프 정의
+│   │   ├── yolov5n_graph.h/c     # 모델 그래프 정의
 │   │   │                         # - 25개 레이어 구조 정의
 │   │   │                         # - 각 레이어의 입력/출력 크기
-│   │   ├── yolov5s_build.h/c     # 모델 빌드
+│   │   ├── yolov5n_build.h/c     # 모델 빌드
 │   │   │                         # - 모든 레이어 초기화
 │   │   │                         # - 가중치 로드 (Conv, BN, C3, SPPF)
 │   │   │                         # - Fused BN 감지 및 처리
-│   │   ├── yolov5s_infer.h/c     # Forward pass
+│   │   ├── yolov5n_infer.h/c     # Forward pass
 │   │   │                         # - 레이어별 forward 호출
 │   │   │                         # - 중간 텐서 저장 (디버깅/검증용)
 │   │   │                         # - P3, P4, P5 feature map 추출
-│   │   └── yolov5s_infer_utils.h # 유틸리티 매크로
+│   │   └── yolov5n_infer_utils.h # 유틸리티 매크로
 │   │
 │   └── postprocess/              # 후처리
 │       ├── detect.h/c             # Detect head
@@ -222,25 +222,28 @@ YOLO_c/
 │   ├── images/                   # 원본 이미지
 │   │   ├── bus.jpg
 │   │   └── zidane.jpg
-│   ├── inputs/                   # 전처리된 텐서
-│   │   ├── bus.bin               # NCHW 텐서 (바이너리)
-│   │   ├── bus_meta.txt          # 메타데이터
-│   │   ├── zidane.bin
-│   │   └── zidane_meta.txt
-│   └── outputs/                  # 검출 결과
-│       └── {image}_detections.txt
+│   ├── yolov5n/                  # YOLOv5n 데이터
+│   │   ├── inputs/               # 전처리된 텐서
+│   │   │   ├── bus.bin           # NCHW 텐서 (바이너리)
+│   │   │   └── bus_meta.txt      # 메타데이터
+│   │   └── outputs/              # 검출 결과
+│   │       └── bus_detections.txt
+│   └── yolov5s/                  # YOLOv5s 데이터 (선택사항)
+│       └── inputs/
 │
-├── testdata/                     # 검증 데이터
+├── testdata_n/                   # YOLOv5n 검증 데이터
 │   ├── python/                   # PyTorch Golden 출력
 │   │   ├── input.bin
 │   │   ├── layer_000.bin ~ layer_023.bin
-│   │   └── output_0.bin
+│   │   ├── output_1_0.bin        # Detect head P3 출력
+│   │   ├── output_1_1.bin        # Detect head P4 출력
+│   │   └── output_1_2.bin        # Detect head P5 출력
 │   └── c/                        # C 구현 출력
 │       ├── input.bin
 │       ├── layer_000.bin ~ layer_023.bin
-│       ├── output_p3.bin
-│       ├── output_p4.bin
-│       └── output_p5.bin
+│       ├── output_1_0.bin
+│       ├── output_1_1.bin
+│       └── output_1_2.bin
 │
 ├── debug/                        # 디버깅 중간 출력
 │   ├── pytorch/                  # PyTorch 중간 텐서
@@ -252,21 +255,18 @@ YOLO_c/
 │       └── (동일한 파일명)
 │
 ├── weights/                      # 모델 가중치
-│   ├── yolov5s.pt                # PyTorch 모델 (원본)
-│   ├── weights.bin                # C용 바이너리 가중치
-│   ├── weights_map.json           # 가중치 매핑 (레이어별 오프셋)
-│   └── model_meta.json           # 모델 메타데이터
+│   ├── yolov5n/                  # YOLOv5n 가중치
+│   │   ├── weights_yolov5n.bin   # C용 바이너리 가중치
+│   │   ├── weights_map_yolov5n.json # 가중치 매핑
+│   │   └── model_meta_yolov5n.json # 모델 메타데이터
+│   └── yolov5s/                  # YOLOv5s 가중치 (선택사항)
+│       ├── weights_yolov5s.bin
+│       ├── weights_map_yolov5s.json
+│       └── model_meta_yolov5s.json
 │
 ├── docs/                         # 문서
 │   ├── MODULE_ARCHITECTURE.md    # 모듈 아키텍처 상세
-│   ├── INFERENCE_FLOW.md         # 추론 파이프라인
-│   ├── DETECTION_FLOW.md         # 검출 파이프라인
-│   ├── PREPROCESSING.md           # 전처리 과정
-│   ├── DEBUGGING_PROCESS.md      # 디버깅 방법론
-│   ├── IMAGE_INFERENCE_WORKFLOW.md # 이미지 입력 워크플로우
-│   ├── ACCURACY_VALIDATION.md    # 정확도 검증
-│   ├── GOLDEN_TENSOR_STORAGE.md  # Golden 텐서 저장 형식
-│   └── LAYER_STRUCTURE_COMPARISON.md # 레이어 구조 비교
+│   └── TESTING_PROCEDURE.md      # 테스트 절차 가이드
 │
 ├── tests/                        # 단위 테스트
 │   ├── test_conv1x1.c            # Conv 1×1 테스트
@@ -414,7 +414,7 @@ cv1 (Conv+BN+SiLU) → x
 ### 1. 이미지 전처리
 
 ```bash
-python tools/preprocess.py --image bus.jpg
+python tools/preprocess.py --image bus.jpg --output data/yolov5n/inputs/
 ```
 
 **처리 과정:**
@@ -423,29 +423,29 @@ python tools/preprocess.py --image bus.jpg
 3. Letterbox resize (비율 유지, 640×640으로 패딩)
 4. 정규화: [0, 255] → [0.0, 1.0]
 5. NCHW 변환: (H, W, C) → (1, 3, H, W)
-6. 바이너리 저장: `data/inputs/bus.bin`
+6. 바이너리 저장: `data/yolov5n/inputs/bus.bin`
 
 **출력:**
-- `data/inputs/bus.bin`: NCHW 텐서
-- `data/inputs/bus_meta.txt`: 원본 크기, 비율 등 메타데이터
+- `data/yolov5n/inputs/bus.bin`: NCHW 텐서
+- `data/yolov5n/inputs/bus_meta.txt`: 원본 크기, 비율 등 메타데이터
 
 ### 2. 가중치 Export
 
 ```bash
-python tools/export_yolov5s.py weights/yolov5s.pt --output weights/
+python tools/export_yolov5s.py yolov5n.pt --output weights/yolov5n/
 ```
 
 **처리 과정:**
 1. PyTorch 모델 로드
 2. 모든 레이어의 가중치 추출
-3. `weights.bin`: 바이너리 파일로 저장
-4. `weights_map.json`: 레이어별 오프셋 및 shape 정보
-5. `model_meta.json`: 모델 메타데이터 (입력 크기, 클래스 수 등)
+3. `weights_yolov5n.bin`: 바이너리 파일로 저장
+4. `weights_map_yolov5n.json`: 레이어별 오프셋 및 shape 정보
+5. `model_meta_yolov5n.json`: 모델 메타데이터 (입력 크기, 클래스 수 등)
 
 **출력:**
-- `weights/weights.bin`: 모든 가중치 (단일 바이너리)
-- `weights/weights_map.json`: 가중치 매핑
-- `weights/model_meta.json`: 모델 메타데이터
+- `weights/yolov5n/weights_yolov5n.bin`: 모든 가중치 (단일 바이너리)
+- `weights/yolov5n/weights_map_yolov5n.json`: 가중치 매핑
+- `weights/yolov5n/model_meta_yolov5n.json`: 모델 메타데이터
 
 ### 3. C 프로그램 실행
 
@@ -478,10 +478,13 @@ yolov5s_infer.exe bus
 
 ```bash
 # 1. PyTorch Golden 생성
-python tools/dump_golden.py weights/yolov5s.pt bus --output testdata/python
+python tools/dump_golden.py yolov5n.pt bus --output testdata_n/python
 
-# 2. 비교
-python tools/compare_tensors.py testdata/python testdata/c
+# 2. C 구현 실행
+.\build\Release\yolov5_infer.exe bus
+
+# 3. 비교
+python tools/compare_tensors.py testdata_n/python testdata_n/c
 ```
 
 **비교 결과:**
@@ -510,7 +513,7 @@ cmake ..
 make -j4
 
 # 실행
-./yolov5s_infer bus
+./yolov5_infer bus
 ```
 
 ### Windows (Visual Studio)
@@ -523,13 +526,13 @@ cmake --build . --config Release
 
 # 실행
 cd Release
-yolov5s_infer.exe bus
+yolov5_infer.exe bus
 ```
 
 ### 실행 파일 위치
 
-- Linux/macOS: `build/yolov5s_infer`
-- Windows: `build/Release/yolov5s_infer.exe`
+- Linux/macOS: `build/yolov5_infer`
+- Windows: `build/Release/yolov5_infer.exe`
 
 ---
 
@@ -612,7 +615,7 @@ python tools/compare_sppf_steps.py
   - `batchnorm2d_forward` 실행
 
 **구현 위치:**
-- `src/models/yolov5s_build.c`: 가중치 로드 시 감지
+- `src/models/yolov5n_build.c`: 가중치 로드 시 감지
 - `src/blocks/c3.c`: `cv1_is_fused`, `cv2_is_fused`, `cv3_is_fused` 플래그
 - `src/blocks/sppf.c`: `cv1_is_fused`, `cv2_is_fused` 플래그
 
@@ -665,23 +668,13 @@ python tools/compare_sppf_steps.py
 
 ### 핵심 문서
 
-- **`docs/MODULE_ARCHITECTURE.md`**: 모듈 아키텍처 상세 설명
-- **`docs/INFERENCE_FLOW.md`**: 추론 파이프라인 단계별 설명
-- **`docs/DETECTION_FLOW.md`**: 검출 파이프라인 (Detect head + NMS)
-- **`docs/PREPROCESSING.md`**: 이미지 전처리 과정 상세
-- **`docs/DEBUGGING_PROCESS.md`**: 디버깅 방법론 및 해결 사례
-- **`docs/IMAGE_INFERENCE_WORKFLOW.md`**: 이미지 입력 전체 워크플로우
-
-### 검증 문서
-
-- **`docs/ACCURACY_VALIDATION.md`**: 정확도 검증 방법
-- **`docs/GOLDEN_TENSOR_STORAGE.md`**: Golden 텐서 저장 형식
-- **`docs/LAYER_STRUCTURE_COMPARISON.md`**: PyTorch vs C 레이어 구조 비교
+- **`docs/MODULE_ARCHITECTURE.md`**: 모듈 아키텍처 상세 설명 (각 모듈의 역할과 메커니즘)
+- **`docs/TESTING_PROCEDURE.md`**: 테스트 절차 가이드 (단위 테스트, 통합 테스트, 정확도 검증)
 
 ### 프로젝트 상태
 
 - **`PROJECT_STATUS.md`**: 완료된 작업 및 진행 상황
-- **`TESTING.md`**: 테스트 가이드
+- **`TESTING.md`**: 테스트 가이드 (기존)
 
 ### 외부 참고
 
@@ -696,18 +689,16 @@ python tools/compare_sppf_steps.py
 
 ```bash
 # 1. 이미지 전처리
-python tools/preprocess.py --image bus.jpg
+python tools/preprocess.py --image bus.jpg --output data/yolov5n/inputs/
 
 # 2. PyTorch Golden 생성
-python tools/dump_golden.py weights/yolov5s.pt bus --output testdata/python
+python tools/dump_golden.py yolov5n.pt bus --output testdata_n/python
 
 # 3. C 프로그램 실행
-cd build/Release
-yolov5s_infer.exe bus
+.\build\Release\yolov5_infer.exe bus
 
 # 4. 비교
-cd ../..
-python tools/compare_tensors.py testdata/python testdata/c
+python tools/compare_tensors.py testdata_n/python testdata_n/c
 ```
 
 ### 새로운 이미지로 테스트
@@ -717,18 +708,16 @@ python tools/compare_tensors.py testdata/python testdata/c
 cp new_image.jpg data/images/
 
 # 2. 전처리
-python tools/preprocess.py --image new_image.jpg
+python tools/preprocess.py --image new_image.jpg --output data/yolov5n/inputs/
 
 # 3. PyTorch Golden 생성
-python tools/dump_golden.py weights/yolov5s.pt new_image --output testdata/python
+python tools/dump_golden.py yolov5n.pt new_image --output testdata_n/python
 
 # 4. C 프로그램 실행
-cd build/Release
-yolov5s_infer.exe new_image
+.\build\Release\yolov5_infer.exe new_image
 
 # 5. 비교
-cd ../..
-python tools/compare_tensors.py testdata/python testdata/c
+python tools/compare_tensors.py testdata_n/python testdata_n/c
 ```
 
 ---
@@ -770,4 +759,4 @@ class_id confidence x_pixel y_pixel w_pixel h_pixel
 
 ---
 
-**마지막 업데이트**: 2024년
+**마지막 업데이트**: 2025년 1월

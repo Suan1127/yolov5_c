@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Dump golden reference tensors from PyTorch YOLOv5s model
+Dump golden reference tensors from PyTorch YOLOv5n model
 Generates intermediate layer outputs for comparison with C implementation
 Saves to testdata/python/ directory with standardized naming
 """
@@ -17,14 +17,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'third_party' / 'yolov5'))
 
 try:
     from models.common import DetectMultiBackend
-    from utils.general import check_img_size
+    from utils.general import check_img_size, non_max_suppression
 except ImportError:
     print("Warning: Could not import YOLOv5 modules. Using fallback method.")
     DetectMultiBackend = None
+    non_max_suppression = None
 
 
 def save_tensor_bin(tensor, filepath):
     """Save tensor to binary file (C format)"""
+    # Convert Path object to string for compatibility
+    if isinstance(filepath, Path):
+        filepath = str(filepath)
     with open(filepath, 'wb') as f:
         shape = np.array(tensor.shape, dtype=np.int32)
         shape.tofile(f)
@@ -267,6 +271,78 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
                 print(f"  Detect conv {i}: shape {output_np.shape} -> {output_path.name}")
                 saved_count += 1
     
+    # Perform detection decode and NMS (for comparison with C implementation)
+    if isinstance(output, (list, tuple)) and len(output) > 0 and isinstance(output[0], torch.Tensor):
+        # output[0] is concatenated tensor (1, 25200, 85)
+        pred = output[0]  # (1, 25200, 85)
+        
+        if non_max_suppression:
+            print(f"\nRunning detection decode and NMS...")
+            # Apply NMS with same parameters as C (matching Python default)
+            conf_threshold = 0.25
+            iou_threshold = 0.45
+            max_detections = 300  # Python default max_det=300
+            
+            # non_max_suppression expects (batch, num_boxes, 85) format
+            # Returns list of detections per image
+            nms_results = non_max_suppression(
+                pred,
+                conf_thres=conf_threshold,
+                iou_thres=iou_threshold,
+                max_det=max_detections
+            )
+            
+            if nms_results and len(nms_results) > 0:
+                # nms_results[0] is tensor of shape (N, 6) where columns are:
+                # [x1, y1, x2, y2, conf, cls]
+                detections = nms_results[0].cpu().numpy()  # (N, 6)
+                
+                # Extract image name from input path
+                image_name = Path(input_tensor_path).stem
+                if image_name == "input":
+                    # Try to get from parent directory or use default
+                    image_name = "image"
+                
+                # Save detections in same format as C
+                detections_path = output_dir / f"{image_name}_detections.txt"
+                with open(detections_path, 'w') as f:
+                    f.write(f"Image: {image_name}\n")
+                    f.write(f"Total detections: {len(detections)}\n")
+                    f.write(f"Format: class_id confidence x y w h (normalized 0-1)\n")
+                    f.write(f"Format: class_id confidence x_pixel y_pixel w_pixel h_pixel\n")
+                    f.write(f"\n")
+                    
+                    # Get input size from input tensor
+                    input_size = max(input_data.shape[2], input_data.shape[3])  # max(H, W)
+                    
+                    for det in detections:
+                        # det format: [x1, y1, x2, y2, conf, cls]
+                        x1, y1, x2, y2, conf, cls_id = det
+                        
+                        # Convert from xyxy to xywh (center, width, height)
+                        x_center = (x1 + x2) / 2.0
+                        y_center = (y1 + y2) / 2.0
+                        w = x2 - x1
+                        h = y2 - y1
+                        
+                        # Normalized coordinates (0-1)
+                        x_norm = x_center / input_size
+                        y_norm = y_center / input_size
+                        w_norm = w / input_size
+                        h_norm = h / input_size
+                        
+                        # Write normalized coordinates
+                        f.write(f"{int(cls_id)} {conf:.4f} {x_norm:.4f} {y_norm:.4f} {w_norm:.4f} {h_norm:.4f}\n")
+                        # Write pixel coordinates
+                        f.write(f"{int(cls_id)} {conf:.4f} {x_center:.1f} {y_center:.1f} {w:.1f} {h:.1f}\n")
+                
+                print(f"  Saved {len(detections)} detections to {detections_path.name}")
+                saved_count += 1
+            else:
+                print(f"  Warning: No detections found after NMS")
+        else:
+            print(f"  Warning: non_max_suppression not available, skipping detection results")
+    
     # Save metadata
     metadata = {
         "save_layers": save_layers,
@@ -285,7 +361,7 @@ def dump_layer_outputs(model_path, input_tensor_path, output_dir, save_layers=No
 
 def main():
     parser = argparse.ArgumentParser(description='Dump golden reference tensors from PyTorch model')
-    parser.add_argument('model', type=str, help='Path to yolov5s.pt')
+    parser.add_argument('model', type=str, help='Path to yolov5n.pt')
     parser.add_argument('input', type=str, 
                         help='Path to input tensor .bin file or image name (e.g., "bus")')
     parser.add_argument('--output', type=str, default='testdata_n/python', 

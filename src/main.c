@@ -16,6 +16,51 @@
 #include "postprocess/detect.h"
 #include "postprocess/nms.h"
 
+// Helper function to save detections to a file
+static void save_detections_file(const char* filepath, const char* img_name,
+                                  detection_t* dets, int32_t count, int32_t img_size) {
+    // Create directory if it doesn't exist
+    char dir_path[512];
+    strncpy(dir_path, filepath, sizeof(dir_path) - 1);
+    dir_path[sizeof(dir_path) - 1] = '\0';
+    char* last_slash = strrchr(dir_path, '/');
+    if (!last_slash) last_slash = strrchr(dir_path, '\\');
+    if (last_slash) {
+        *last_slash = '\0';
+        #ifdef _WIN32
+        // Convert / to \ for Windows
+        for (int j = 0; dir_path[j]; j++) {
+            if (dir_path[j] == '/') dir_path[j] = '\\';
+        }
+        #endif
+        mkdir(dir_path, 0755);
+    }
+    
+    FILE* fp = fopen(filepath, "w");
+    if (fp) {
+        fprintf(fp, "Image: %s\n", img_name);
+        fprintf(fp, "Total detections: %d\n", count);
+        fprintf(fp, "Format: class_id confidence x y w h (normalized 0-1)\n");
+        fprintf(fp, "Format: class_id confidence x_pixel y_pixel w_pixel h_pixel\n");
+        fprintf(fp, "\n");
+        
+        for (int i = 0; i < count; i++) {
+            detection_t* det = &dets[i];
+            fprintf(fp, "%d %.4f %.4f %.4f %.4f %.4f\n",
+                    det->cls_id, det->conf,
+                    det->x, det->y, det->w, det->h);
+            fprintf(fp, "%d %.4f %.1f %.1f %.1f %.1f\n",
+                    det->cls_id, det->conf,
+                    det->x * img_size, det->y * img_size,
+                    det->w * img_size, det->h * img_size);
+        }
+        fclose(fp);
+        printf("Results saved to: %s\n", filepath);
+    } else {
+        fprintf(stderr, "Warning: Failed to save results to: %s\n", filepath);
+    }
+}
+
 void print_usage(const char* prog_name) {
     printf("Usage: %s <image_name> [weights.bin] [model_meta.json]\n", prog_name);
     printf("\n");
@@ -353,14 +398,6 @@ int main(int argc, char* argv[]) {
         if (tensor_dump(detect_output.p5_output, filepath) == 0) {
             printf("  Saved P5 detect output to %s\n", filepath);
         }
-        
-        // Also save as output_0.bin, output_1.bin, output_2.bin for backward compatibility
-        snprintf(filepath, sizeof(filepath), "%s/output_0.bin", output_dir);
-        tensor_dump(detect_output.p3_output, filepath);
-        snprintf(filepath, sizeof(filepath), "%s/output_1.bin", output_dir);
-        tensor_dump(detect_output.p4_output, filepath);
-        snprintf(filepath, sizeof(filepath), "%s/output_2.bin", output_dir);
-        tensor_dump(detect_output.p5_output, filepath);
     }
     
     // Decode detections
@@ -382,12 +419,31 @@ int main(int argc, char* argv[]) {
     }
     printf("Found %d detections (confidence > %.2f)\n", num_detections, conf_threshold);
     
+    // Sort all detections by confidence (descending) before limiting
+    // This matches Python: x = x[x[:, 4].argsort(descending=True)[:max_nms]]
+    for (int i = 0; i < num_detections - 1; i++) {
+        for (int j = i + 1; j < num_detections; j++) {
+            if (detections[i].conf < detections[j].conf) {
+                detection_t temp = detections[i];
+                detections[i] = detections[j];
+                detections[j] = temp;
+            }
+        }
+    }
+    
+    // Limit to top 30000 detections before NMS (matching Python max_nms=30000)
+    int32_t max_nms = 30000;
+    if (num_detections > max_nms) {
+        num_detections = max_nms;
+        printf("Limited to top %d detections before NMS (matching Python max_nms)\n", max_nms);
+    }
+    
     // NMS
     printf("\nRunning NMS...\n");
     detection_t* nms_detections = NULL;
     int32_t nms_count = 0;
     float iou_threshold = 0.45f;
-    int32_t max_detections = 1000;
+    int32_t max_detections = 300;  // Match Python default max_det=300
     
     ret = nms(detections, num_detections, &nms_detections, &nms_count, iou_threshold, max_detections);
     if (ret != 0) {
@@ -424,64 +480,36 @@ int main(int argc, char* argv[]) {
     // Save results to file
     printf("\nSaving results...\n");
     
-    // Try multiple output paths (YOLOv5n)
+    // Save to data/yolov5n/outputs/ (original location)
     char output_paths[3][512];
     snprintf(output_paths[0], sizeof(output_paths[0]), "data/yolov5n/outputs/%s_detections.txt", image_name);
     snprintf(output_paths[1], sizeof(output_paths[1]), "../data/yolov5n/outputs/%s_detections.txt", image_name);
     snprintf(output_paths[2], sizeof(output_paths[2]), "../../data/yolov5n/outputs/%s_detections.txt", image_name);
     
-    FILE* fp = NULL;
     const char* saved_path = NULL;
     for (int i = 0; i < 3; i++) {
-        // Create directory if it doesn't exist
-        char dir_path[512];
-        strncpy(dir_path, output_paths[i], sizeof(dir_path) - 1);
-        dir_path[sizeof(dir_path) - 1] = '\0';
-        char* last_slash = strrchr(dir_path, '/');
-        if (!last_slash) last_slash = strrchr(dir_path, '\\');
-        if (last_slash) {
-            *last_slash = '\0';
-            // Try to create directory (will fail silently if exists)
-            #ifdef _WIN32
-            // Convert / to \ for Windows
-            for (int j = 0; dir_path[j]; j++) {
-                if (dir_path[j] == '/') dir_path[j] = '\\';
-            }
-            #endif
-            mkdir(dir_path, 0755);
-        }
-        
-        fp = fopen(output_paths[i], "w");
-        if (fp) {
+        FILE* test_fp = fopen(output_paths[i], "w");
+        if (test_fp) {
+            fclose(test_fp);
+            save_detections_file(output_paths[i], image_name, nms_detections, nms_count, input_size);
             saved_path = output_paths[i];
             break;
         }
     }
     
-    if (fp) {
-        fprintf(fp, "Image: %s\n", image_name);
-        fprintf(fp, "Total detections: %d\n", nms_count);
-        fprintf(fp, "Format: class_id confidence x y w h (normalized 0-1)\n");
-        fprintf(fp, "Format: class_id confidence x_pixel y_pixel w_pixel h_pixel\n");
-        fprintf(fp, "\n");
-        
-        for (int i = 0; i < nms_count; i++) {
-            detection_t* det = &nms_detections[i];
-            fprintf(fp, "%d %.4f %.4f %.4f %.4f %.4f\n",
-                    det->cls_id, det->conf,
-                    det->x, det->y, det->w, det->h);
-            fprintf(fp, "%d %.4f %.1f %.1f %.1f %.1f\n",
-                    det->cls_id, det->conf,
-                    det->x * input_size, det->y * input_size, det->w * input_size, det->h * input_size);
-        }
-        fclose(fp);
-        printf("Results saved to: %s\n", saved_path);
-    } else {
-        fprintf(stderr, "Warning: Failed to save results\n");
+    if (!saved_path) {
+        fprintf(stderr, "Warning: Failed to save results to data/yolov5n/outputs/\n");
         fprintf(stderr, "Tried paths:\n");
         for (int i = 0; i < 3; i++) {
             fprintf(stderr, "  - %s\n", output_paths[i]);
         }
+    }
+    
+    // Also save to testdata_n/c/ (for comparison with Python)
+    if (output_dir && strlen(output_dir) > 0) {
+        char testdata_path[512];
+        snprintf(testdata_path, sizeof(testdata_path), "%s/%s_detections.txt", output_dir, image_name);
+        save_detections_file(testdata_path, image_name, nms_detections, nms_count, input_size);
     }
     
     // Cleanup
