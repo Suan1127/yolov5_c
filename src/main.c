@@ -316,7 +316,6 @@ int main(int argc, char* argv[]) {
     
     // Forward pass
     printf("\nRunning forward pass...\n");
-    printf("This may take a while...\n");
     fflush(stdout);  // Ensure output is flushed
     
     int ret = yolov5n_forward(model, input, outputs);
@@ -379,25 +378,17 @@ int main(int argc, char* argv[]) {
     // because output[1] is the list of 3 tensors [P3, P4, P5]
     if (output_dir && strlen(output_dir) > 0) {
         char filepath[512];
-        printf("\nSaving detect head outputs...\n");
-        
         // Save P3 detect output as output_1_0.bin (to match Python)
         snprintf(filepath, sizeof(filepath), "%s/output_1_0.bin", output_dir);
-        if (tensor_dump(detect_output.p3_output, filepath) == 0) {
-            printf("  Saved P3 detect output to %s\n", filepath);
-        }
+        tensor_dump(detect_output.p3_output, filepath);
         
         // Save P4 detect output as output_1_1.bin (to match Python)
         snprintf(filepath, sizeof(filepath), "%s/output_1_1.bin", output_dir);
-        if (tensor_dump(detect_output.p4_output, filepath) == 0) {
-            printf("  Saved P4 detect output to %s\n", filepath);
-        }
+        tensor_dump(detect_output.p4_output, filepath);
         
         // Save P5 detect output as output_1_2.bin (to match Python)
         snprintf(filepath, sizeof(filepath), "%s/output_1_2.bin", output_dir);
-        if (tensor_dump(detect_output.p5_output, filepath) == 0) {
-            printf("  Saved P5 detect output to %s\n", filepath);
-        }
+        tensor_dump(detect_output.p5_output, filepath);
     }
     
     // Decode detections

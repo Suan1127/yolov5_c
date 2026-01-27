@@ -105,7 +105,7 @@ make
 cd ..
 ```
 
-**빌드 결과**:
+**빌드 결과**:ㅊㅊ
 - Windows: `build/Release/yolov5_infer.exe`
 - Linux/macOS: `build/yolov5_infer`
 

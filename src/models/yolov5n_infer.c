@@ -10,14 +10,32 @@
 #include <string.h>
 #ifdef _WIN32
 #include <direct.h>
+#include <windows.h>
 #define mkdir(path, mode) _mkdir(path)
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #endif
 
 // Output directory for saving intermediate tensors
 static char g_output_dir[512] = {0};
+
+// Timing utilities
+#ifdef _WIN32
+static double get_time_ms(void) {
+    LARGE_INTEGER frequency, counter;
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart * 1000.0 / (double)frequency.QuadPart;
+}
+#else
+static double get_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
+#endif
 
 // Forward declaration for conv2d_output_size helper
 static void conv2d_output_size_helper(int32_t in_h, int32_t in_w, 
@@ -62,10 +80,7 @@ static void save_feature(yolov5n_model_t* model, int32_t layer_idx, tensor_t* fe
         char filepath[512];
         snprintf(filepath, sizeof(filepath), "%s/layer_%03d.bin", g_output_dir, layer_idx);
         int ret = tensor_dump(feature, filepath);
-        if (ret == 0) {
-            printf("      Saved layer %d to %s\n", layer_idx, filepath);
-            fflush(stdout);
-        } else {
+        if (ret != 0) {
             fprintf(stderr, "      Warning: Failed to save layer %d to %s\n", layer_idx, filepath);
         }
     }
@@ -147,13 +162,16 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         return -1;
     }
     
+    // Start timing for entire forward pass (declared at function start for proper scope)
+    double forward_start = get_time_ms();
+    
     // Save input tensor if output directory is set
     if (g_output_dir[0] != '\0') {
         char filepath[512];
         snprintf(filepath, sizeof(filepath), "%s/input.bin", g_output_dir);
         int ret = tensor_dump(input, filepath);
         if (ret == 0) {
-            printf("  Saved input tensor to %s\n", filepath);
+            // Input tensor saved silently
             fflush(stdout);
         } else {
             fprintf(stderr, "  Warning: Failed to save input tensor to %s\n", filepath);
@@ -213,14 +231,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
-    printf("    Layer 0: Running Conv2D forward...\n");
-    printf("      Input shape: (%d, %d, %d, %d)\n", input->n, input->c, input->h, input->w);
-    printf("      Output shape: (%d, %d, %d, %d)\n", buf_a->n, buf_a->c, buf_a->h, buf_a->w);
-    printf("      Conv params: kernel=%d, stride=%d, padding=%d\n",
-           model->backbone_convs[0].conv.params.kernel_size,
-           model->backbone_convs[0].conv.params.stride,
-           model->backbone_convs[0].conv.params.padding);
-    
+    double layer0_start = get_time_ms();
     if (conv2d_forward(&model->backbone_convs[0].conv, input, buf_a) != 0) {
         fprintf(stderr, "Error: Conv2D forward failed at Layer 0\n");
         fprintf(stderr, "  Input: (%d, %d, %d, %d)\n", input->n, input->c, input->h, input->w);
@@ -235,7 +246,6 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         char filepath[512];
         snprintf(filepath, sizeof(filepath), "%s/layer_000_conv_only.bin", g_output_dir);
         tensor_dump(buf_a, filepath);
-        printf("    Saved Conv0 output (before BN) to %s\n", filepath);
         fflush(stdout);
     }
     
@@ -256,13 +266,13 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
             char filepath[512];
             snprintf(filepath, sizeof(filepath), "%s/layer_000_bn_only.bin", g_output_dir);
             tensor_dump(buf_a, filepath);
-            printf("    Saved Conv0+BN output (before SiLU) to %s\n", filepath);
             fflush(stdout);
         }
     }
     activation_silu(buf_a);
     save_feature(model, 0, buf_a);
-    printf("    Layer 0 completed\n");
+    double layer0_end = get_time_ms();
+    printf("    Layer 0 completed (%.2f ms)\n", layer0_end - layer0_start);
     fflush(stdout);
     
     // Layer 1: Conv(16->32, 3x3, s=2) for YOLOv5n
@@ -276,6 +286,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer1_start = get_time_ms();
     if (conv2d_forward(&model->backbone_convs[1].conv, buf_a, buf_b) != 0) {
         fprintf(stderr, "Error: Conv2D forward failed at Layer 1\n");
         goto error;
@@ -288,7 +299,8 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     }
     activation_silu(buf_b);
     save_feature(model, 1, buf_b);
-    printf("    Layer 1 completed\n");
+    double layer1_end = get_time_ms();
+    printf("    Layer 1 completed (%.2f ms)\n", layer1_end - layer1_start);
     fflush(stdout);
     
     // Swap buffers
@@ -312,13 +324,15 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     // C3 forward will allocate workspace internally if NULL
     // workspace1: cv1 output (c_ = 32 channels)
     // workspace2: concat result (2*c_ = 64 channels)
+    double layer2_start = get_time_ms();
     if (c3_forward(&model->backbone_c3s[0].block, buf_a, buf_b, NULL, NULL) != 0) {
         fprintf(stderr, "Error: C3 forward failed at Layer 2\n");
         goto error;
     }
     
     save_feature(model, 2, buf_b);
-    printf("    Layer 2 completed\n");
+    double layer2_end = get_time_ms();
+    printf("    Layer 2 completed (%.2f ms)\n", layer2_end - layer2_start);
     fflush(stdout);
     
     // Swap: buf_a = old input (64), buf_b = C3 output (64)
@@ -338,6 +352,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer3_start = get_time_ms();
     if (conv2d_forward(&model->backbone_convs[2].conv, buf_a, buf_b) != 0) {
         fprintf(stderr, "Error: Conv2D forward failed at Layer 3\n");
         goto error;
@@ -350,7 +365,8 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     }
     activation_silu(buf_b);
     save_feature(model, 3, buf_b);
-    printf("    Layer 3 completed\n");
+    double layer3_end = get_time_ms();
+    printf("    Layer 3 completed (%.2f ms)\n", layer3_end - layer3_start);
     fflush(stdout);
     
     // Swap: buf_a = old input (64), buf_b = Layer 3 output (128)
@@ -370,13 +386,15 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer4_start = get_time_ms();
     if (c3_forward(&model->backbone_c3s[1].block, buf_a, buf_b, NULL, NULL) != 0) {
         fprintf(stderr, "Error: C3 forward failed at Layer 4\n");
         goto error;
     }
-    printf("    Layer 4 completed\n");
-    fflush(stdout);
     save_feature(model, 4, buf_b);
+    double layer4_end = get_time_ms();
+    printf("    Layer 4 completed (%.2f ms)\n", layer4_end - layer4_start);
+    fflush(stdout);
     temp = buf_a;
     buf_a = buf_b;
     buf_b = temp;
@@ -393,6 +411,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer5_start = get_time_ms();
     if (conv2d_forward(&model->backbone_convs[3].conv, buf_a, buf_b) != 0) {
         fprintf(stderr, "Error: Conv2D forward failed at Layer 5\n");
         goto error;
@@ -405,7 +424,8 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     }
     activation_silu(buf_b);
     save_feature(model, 5, buf_b);
-    printf("    Layer 5 completed\n");
+    double layer5_end = get_time_ms();
+    printf("    Layer 5 completed (%.2f ms)\n", layer5_end - layer5_start);
     fflush(stdout);
     
     temp = buf_a;
@@ -421,12 +441,14 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         fprintf(stderr, "Error: Failed to allocate buffer for Layer 6\n");
         goto error;
     }
+    double layer6_start = get_time_ms();
     if (c3_forward(&model->backbone_c3s[2].block, buf_a, buf_b, NULL, NULL) != 0) {
         fprintf(stderr, "Error: C3 forward failed at Layer 6\n");
         goto error;
     }
     save_feature(model, 6, buf_b);
-    printf("    Layer 6 completed\n");
+    double layer6_end = get_time_ms();
+    printf("    Layer 6 completed (%.2f ms)\n", layer6_end - layer6_start);
     fflush(stdout);
     temp = buf_a;
     buf_a = buf_b;
@@ -444,6 +466,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer7_start = get_time_ms();
     if (conv2d_forward(&model->backbone_convs[4].conv, buf_a, buf_b) != 0) {
         fprintf(stderr, "Error: Conv2D forward failed at Layer 7\n");
         goto error;
@@ -456,7 +479,8 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     }
     activation_silu(buf_b);
     save_feature(model, 7, buf_b);
-    printf("    Layer 7 completed\n");
+    double layer7_end = get_time_ms();
+    printf("    Layer 7 completed (%.2f ms)\n", layer7_end - layer7_start);
     fflush(stdout);
     
     temp = buf_a;
@@ -473,12 +497,14 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         fprintf(stderr, "Error: Failed to allocate buffer for Layer 8\n");
         goto error;
     }
+    double layer8_start = get_time_ms();
     if (c3_forward(&model->backbone_c3s[3].block, buf_a, buf_b, NULL, NULL) != 0) {
         fprintf(stderr, "Error: C3 forward failed at Layer 8\n");
         goto error;
     }
     save_feature(model, 8, buf_b);
-    printf("    Layer 8 completed\n");
+    double layer8_end = get_time_ms();
+    printf("    Layer 8 completed (%.2f ms)\n", layer8_end - layer8_start);
     fflush(stdout);
     temp = buf_a;
     buf_a = buf_b;
@@ -488,21 +514,23 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     printf("    Layer 9: SPPF(512->512, k=5)...\n");
     fflush(stdout);
     
+    double layer9_start = get_time_ms();
     if (sppf_forward(&model->sppf, buf_a, buf_b, NULL, NULL, NULL) != 0) {
         fprintf(stderr, "Error: SPPF forward failed at Layer 9\n");
         goto error;
     }
     
     save_feature(model, 9, buf_b);
-    printf("    Layer 9 completed\n");
+    double layer9_end = get_time_ms();
+    printf("    Layer 9 completed (%.2f ms)\n", layer9_end - layer9_start);
     fflush(stdout);
     temp = buf_a;
     buf_a = buf_b;
     buf_b = temp;
     
-    // ========== Head (10-23) ==========
+    // ========== Neck (10-23) ==========
     printf("  Backbone completed\n");
-    printf("  Head: Layers 10-23...\n");
+    printf("  Neck: Layers 10-23...\n");
     fflush(stdout);
     
     // Layer 10: Conv(256->128, 1x1) for YOLOv5n
@@ -515,6 +543,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer10_start = get_time_ms();
     if (conv2d_forward(&model->head_convs[0].conv, buf_a, buf_b) != 0) {
         fprintf(stderr, "Error: Conv2D forward failed at Layer 10\n");
         goto error;
@@ -527,7 +556,8 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     }
     activation_silu(buf_b);
     save_feature(model, 10, buf_b);
-    printf("    Layer 10 completed\n");
+    double layer10_end = get_time_ms();
+    printf("    Layer 10 completed (%.2f ms)\n", layer10_end - layer10_start);
     fflush(stdout);
     
     // Save layer 10 output for later concat
@@ -551,12 +581,14 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         .scale_factor = 2,
         .mode = "nearest"
     };
+    double layer11_start = get_time_ms();
     if (upsample_forward(&upsample_params, buf_b, buf_a) != 0) {
         fprintf(stderr, "Error: Upsample forward failed at Layer 11\n");
         goto error;
     }
     save_feature(model, 11, buf_a);
-    printf("    Layer 11 completed\n");
+    double layer11_end = get_time_ms();
+    printf("    Layer 11 completed (%.2f ms)\n", layer11_end - layer11_start);
     fflush(stdout);
     
     // Layer 12: Concat([11, 6])
@@ -583,13 +615,15 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer12_start = get_time_ms();
     const tensor_t* concat_inputs[2] = {buf_a, layer6_feature};
     if (concat_forward(concat_inputs, 2, buf_b) != 0) {
         fprintf(stderr, "Error: Concat forward failed at Layer 12\n");
         goto error;
     }
     save_feature(model, 12, buf_b);
-    printf("    Layer 12 completed\n");
+    double layer12_end = get_time_ms();
+    printf("    Layer 12 completed (%.2f ms)\n", layer12_end - layer12_start);
     fflush(stdout);
     
     // Layer 13: C3(256->128, n=1, shortcut=False) for YOLOv5n
@@ -602,12 +636,14 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer13_start = get_time_ms();
     if (c3_forward(&model->head_c3s[0].block, buf_b, buf_a, NULL, NULL) != 0) {
         fprintf(stderr, "Error: C3 forward failed at Layer 13\n");
         goto error;
     }
     save_feature(model, 13, buf_a);
-    printf("    Layer 13 completed\n");
+    double layer13_end = get_time_ms();
+    printf("    Layer 13 completed (%.2f ms)\n", layer13_end - layer13_start);
     fflush(stdout);
     
     // Save layer 13 output for later concat
@@ -625,6 +661,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer14_start = get_time_ms();
     if (conv2d_forward(&model->head_convs[1].conv, buf_a, buf_b) != 0) {
         fprintf(stderr, "Error: Conv2D forward failed at Layer 14\n");
         goto error;
@@ -637,7 +674,8 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     }
     activation_silu(buf_b);
     save_feature(model, 14, buf_b);
-    printf("    Layer 14 completed\n");
+    double layer14_end = get_time_ms();
+    printf("    Layer 14 completed (%.2f ms)\n", layer14_end - layer14_start);
     fflush(stdout);
     
     // Save layer 14 output for later concat (Layer 19)
@@ -650,25 +688,22 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     fflush(stdout);
     int32_t l15_h = l11_h * 2;
     int32_t l15_w = l11_w * 2;
-    printf("      Input (buf_b): (%d, %d, %d, %d)\n", buf_b->n, buf_b->c, buf_b->h, buf_b->w);
-    printf("      Expected output: (%d, %d, %d, %d)\n", buf_b->n, buf_b->c, l15_h, l15_w);
-    fflush(stdout);
     tensor_free(buf_a);
     buf_a = tensor_create(1, model->head_convs[1].out_channels, l15_h, l15_w);
     if (!buf_a) {
         fprintf(stderr, "Error: Failed to allocate buffer for Layer 15\n");
         goto error;
     }
-    printf("      Allocated output (buf_a): (%d, %d, %d, %d)\n", buf_a->n, buf_a->c, buf_a->h, buf_a->w);
-    fflush(stdout);
     
+    double layer15_start = get_time_ms();
     if (upsample_forward(&upsample_params, buf_b, buf_a) != 0) {
         fprintf(stderr, "Error: Upsample forward failed at Layer 15\n");
         fprintf(stderr, "  Input: (%d, %d, %d, %d)\n", buf_b->n, buf_b->c, buf_b->h, buf_b->w);
         fprintf(stderr, "  Output: (%d, %d, %d, %d)\n", buf_a->n, buf_a->c, buf_a->h, buf_a->w);
         goto error;
     }
-    printf("    Layer 15 completed\n");
+    double layer15_end = get_time_ms();
+    printf("    Layer 15 completed (%.2f ms)\n", layer15_end - layer15_start);
     fflush(stdout);
     
     // Layer 16: Concat([15, 4])
@@ -695,13 +730,15 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer16_start = get_time_ms();
     const tensor_t* concat_inputs2[2] = {buf_a, layer4_feature};
     if (concat_forward(concat_inputs2, 2, buf_b) != 0) {
         fprintf(stderr, "Error: Concat forward failed at Layer 16\n");
         goto error;
     }
     save_feature(model, 16, buf_b);
-    printf("    Layer 16 completed\n");
+    double layer16_end = get_time_ms();
+    printf("    Layer 16 completed (%.2f ms)\n", layer16_end - layer16_start);
     fflush(stdout);
     
     // Layer 17: C3(128->64, n=1, shortcut=False) -> SAVE[17] (P3) for YOLOv5n
@@ -714,11 +751,13 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer17_start = get_time_ms();
     if (c3_forward(&model->head_c3s[1].block, buf_b, buf_a, NULL, NULL) != 0) {
         fprintf(stderr, "Error: C3 forward failed at Layer 17\n");
         goto error;
     }
-    printf("    Layer 17 completed\n");
+    double layer17_end = get_time_ms();
+    printf("    Layer 17 completed (%.2f ms)\n", layer17_end - layer17_start);
     fflush(stdout);
     save_feature(model, 17, buf_a);
     
@@ -744,6 +783,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer18_start = get_time_ms();
     if (conv2d_forward(&model->head_convs[2].conv, buf_a, buf_b) != 0) {
         fprintf(stderr, "Error: Conv2D forward failed at Layer 18\n");
         goto error;
@@ -756,16 +796,12 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     }
     activation_silu(buf_b);
     save_feature(model, 18, buf_b);
-    printf("    Layer 18 completed\n");
+    double layer18_end = get_time_ms();
+    printf("    Layer 18 completed (%.2f ms)\n", layer18_end - layer18_start);
     fflush(stdout);
     
     // Layer 19: Concat([18, 14]) - according to YAML: [[-1, 14], 1, Concat, [1]]
     printf("    Layer 19: Concat([18, 14])...\n");
-    fflush(stdout);
-    
-    // Debug: Print input tensor shapes
-    printf("      Layer 18 output: (%d, %d, %d, %d)\n", buf_b->n, buf_b->c, buf_b->h, buf_b->w);
-    printf("      Layer 14 output: (%d, %d, %d, %d)\n", layer14_output->n, layer14_output->c, layer14_output->h, layer14_output->w);
     fflush(stdout);
     
     // If layer14_output size doesn't match, we need to resize it
@@ -812,6 +848,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer19_start = get_time_ms();
     const tensor_t* concat_inputs3[2] = {buf_b, layer14_resized};
     if (concat_forward(concat_inputs3, 2, buf_a) != 0) {
         fprintf(stderr, "Error: Concat forward failed at Layer 19\n");
@@ -833,7 +870,8 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     
     // Free layer14_output after use
     tensor_free(layer14_output);
-    printf("    Layer 19 completed\n");
+    double layer19_end = get_time_ms();
+    printf("    Layer 19 completed (%.2f ms)\n", layer19_end - layer19_start);
     fflush(stdout);
     
     // Layer 20: C3(128->128, n=1, shortcut=False) -> SAVE[20] (P4) for YOLOv5n
@@ -847,11 +885,13 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer20_start = get_time_ms();
     if (c3_forward(&model->head_c3s[2].block, buf_a, buf_b, NULL, NULL) != 0) {
         fprintf(stderr, "Error: C3 forward failed at Layer 20\n");
         goto error;
     }
-    printf("    Layer 20 completed\n");
+    double layer20_end = get_time_ms();
+    printf("    Layer 20 completed (%.2f ms)\n", layer20_end - layer20_start);
     fflush(stdout);
     save_feature(model, 20, buf_b);
     
@@ -877,6 +917,7 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer21_start = get_time_ms();
     if (conv2d_forward(&model->head_convs[3].conv, buf_b, buf_a) != 0) {
         fprintf(stderr, "Error: Conv2D forward failed at Layer 21\n");
         goto error;
@@ -889,7 +930,8 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
     }
     activation_silu(buf_a);
     save_feature(model, 21, buf_a);
-    printf("    Layer 21 completed\n");
+    double layer21_end = get_time_ms();
+    printf("    Layer 21 completed (%.2f ms)\n", layer21_end - layer21_start);
     fflush(stdout);
     
     // Layer 22: Concat([21, 10])
@@ -910,13 +952,15 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer22_start = get_time_ms();
     const tensor_t* concat_inputs4[2] = {buf_a, layer10_output};
     if (concat_forward(concat_inputs4, 2, buf_b) != 0) {
         fprintf(stderr, "Error: Concat forward failed at Layer 22\n");
         goto error;
     }
     save_feature(model, 22, buf_b);
-    printf("    Layer 22 completed\n");
+    double layer22_end = get_time_ms();
+    printf("    Layer 22 completed (%.2f ms)\n", layer22_end - layer22_start);
     fflush(stdout);
     
     // Layer 23: C3(256->256, n=1, shortcut=False) -> SAVE[23] (P5) for YOLOv5n
@@ -929,11 +973,13 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         goto error;
     }
     
+    double layer23_start = get_time_ms();
     if (c3_forward(&model->head_c3s[3].block, buf_b, buf_a, NULL, NULL) != 0) {
         fprintf(stderr, "Error: C3 forward failed at Layer 23\n");
         goto error;
     }
-    printf("    Layer 23 completed\n");
+    double layer23_end = get_time_ms();
+    printf("    Layer 23 completed (%.2f ms)\n", layer23_end - layer23_start);
     fflush(stdout);
     save_feature(model, 23, buf_a);
     
@@ -947,31 +993,24 @@ int yolov5n_forward(yolov5n_model_t* model, const tensor_t* input, tensor_t* out
         tensor_copy(output[2], buf_a);
     }
     
-    printf("  Head completed\n");
+    double forward_end = get_time_ms();
+    printf("  Neck completed\n");
+    printf("  Total forward pass time: %.2f ms\n", forward_end - forward_start);
     fflush(stdout);
     
     // Save output tensors (P3, P4, P5) if output directory is set
     // These are intermediate feature maps for Detect head, so save to testdata/c/
     if (g_output_dir[0] != '\0' && output[0] && output[1] && output[2]) {
         char filepath[512];
-        printf("  Saving output feature maps...\n");
-        fflush(stdout);
         
         snprintf(filepath, sizeof(filepath), "%s/output_p3.bin", g_output_dir);
-        if (tensor_dump(output[0], filepath) == 0) {
-            printf("    Saved P3 to %s\n", filepath);
-        }
+        tensor_dump(output[0], filepath);
         
         snprintf(filepath, sizeof(filepath), "%s/output_p4.bin", g_output_dir);
-        if (tensor_dump(output[1], filepath) == 0) {
-            printf("    Saved P4 to %s\n", filepath);
-        }
+        tensor_dump(output[1], filepath);
         
         snprintf(filepath, sizeof(filepath), "%s/output_p5.bin", g_output_dir);
-        if (tensor_dump(output[2], filepath) == 0) {
-            printf("    Saved P5 to %s\n", filepath);
-        }
-        fflush(stdout);
+        tensor_dump(output[2], filepath);
     }
     
     // Cleanup
