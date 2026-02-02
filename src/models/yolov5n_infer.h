@@ -43,6 +43,18 @@ int yolov5n_get_detect_features(yolov5n_model_t* model, tensor_t** p3, tensor_t*
 int yolov5n_set_output_dir(yolov5n_model_t* model, const char* output_dir);
 
 /**
+ * Layer stats callback: (layer_idx, output_tensor) for UART/verification
+ * Called after each layer 0-23 output. NULL to disable.
+ */
+typedef void (*yolov5n_layer_stats_fn)(int layer_idx, const tensor_t* t);
+
+/**
+ * Set callback to report each layer output stats (chk/min/max/mean etc.)
+ * @param cb Callback(layer_idx, tensor); NULL to disable
+ */
+void yolov5n_set_layer_stats_callback(yolov5n_layer_stats_fn cb);
+
+/**
  * Save all saved features to files
  * @param model Model instance
  * @return 0 on success, -1 on failure

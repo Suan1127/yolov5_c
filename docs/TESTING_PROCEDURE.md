@@ -62,9 +62,11 @@ YOLOv5n 가중치 파일이 다음 위치에 있어야 합니다:
 
 ```
 weights/yolov5n/
-├── weights_yolov5n.bin          # 바이너리 가중치 파일
-├── weights_map_yolov5n.json     # 가중치 맵 파일
-└── model_meta_yolov5n.json      # 모델 메타데이터 (선택사항)
+├── weights_unfused.bin          # 바이너리 가중치 (unfused, 기본)
+├── weights_fused.bin            # 바이너리 가중치 (fused, 선택)
+├── weights_map_unfused.json     # 가중치 맵 (unfused)
+├── weights_map_fused.json       # 가중치 맵 (fused)
+└── model_meta_*.json            # 모델 메타데이터 (선택사항)
 ```
 
 **가중치 파일이 없는 경우**:
@@ -105,13 +107,15 @@ make
 cd ..
 ```
 
-**빌드 결과**:ㅊㅊ
+**빌드 결과**:
 - Windows: `build/Release/yolov5_infer.exe`
 - Linux/macOS: `build/yolov5_infer`
 
 ---
 
 ## 단위 테스트
+
+.\yolov5_infer.exe bus
 
 ### 2.1 텐서 연산 테스트
 
@@ -482,7 +486,7 @@ done
 **해결 방법**:
 1. 가중치 파일 확인
    ```bash
-   ls -lh weights/yolov5n/weights_yolov5n.bin
+   ls -lh weights/yolov5n/weights_unfused.bin
    ```
 2. 가중치 맵 파일 확인
    ```bash
@@ -569,7 +573,7 @@ done
 1. 가중치 로드 확인
    ```bash
    # 가중치 파일 크기 확인
-   ls -lh weights/yolov5n/weights_yolov5n.bin
+   ls -lh weights/yolov5n/weights_unfused.bin
    ```
 
 2. 레이어 실행 순서 확인
@@ -685,7 +689,9 @@ data/
 
 weights/
 └── yolov5n/
-    ├── weights_yolov5n.bin
-    ├── weights_map_yolov5n.json
-    └── model_meta_yolov5n.json
+    ├── weights_unfused.bin
+    ├── weights_map_unfused.json
+    ├── weights_fused.bin
+    ├── weights_map_fused.json
+    └── model_meta_*.json
 ```

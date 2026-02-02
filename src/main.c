@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #ifdef _WIN32
 #include <windows.h>
 #include <direct.h>
@@ -15,6 +16,62 @@
 #include "models/yolov5n_infer.h"
 #include "postprocess/detect.h"
 #include "postprocess/nms.h"
+
+/* UART 검증용: platform.c와 동일한 체크섬/통계 (P3,P4,P5 비교)
+ * chk 비교가 유효하려면:
+ * - 순회 범위: data[0]부터 size바이트까지, 메모리 주소 순서(바이트 단위)로만 순회.
+ * - 양쪽 모두 NCHW 레이아웃, 같은 shape(n,c,h,w) → size = n*c*h*w*sizeof(float).
+ * - 엔디안이 같아야 함. 순서/범위가 조금만 달라도 chk가 달라지므로, 먼저 shape가 같은지 확인 후 chk 비교. */
+static uint32_t checksum32_bytes(const void* data, size_t size) {
+    if (!data || size == 0) return 0;
+    const uint8_t* bytes = (const uint8_t*)data;
+    uint32_t checksum = 0;
+    for (size_t i = 0; i < size; i++) {
+        checksum += bytes[i];
+        checksum = (checksum << 1) | (checksum >> 31);
+    }
+    return checksum;
+}
+
+/* 비교용: 데이터 앞 N바이트만 hex로 출력 (chk 대신 임베디드와 동일한지 빠르게 확인) */
+#define TENSOR_HEAD_BYTES 32
+static void print_tensor_head(const char* name, const tensor_t* t, size_t num_bytes) {
+    if (!t || !t->data || num_bytes == 0) return;
+    size_t data_bytes = tensor_size(t) * sizeof(float);
+    if (num_bytes > data_bytes) num_bytes = data_bytes;
+    const uint8_t* p = (const uint8_t*)t->data;
+    printf("  %s head(%zuB):", name, num_bytes);
+    for (size_t i = 0; i < num_bytes; i++)
+        printf(" %02X", (unsigned)p[i]);
+    printf("\n");
+}
+
+static void print_tensor_stats_p(const char* name, const tensor_t* t) {
+    if (!t || !t->data) return;
+    size_t count = tensor_size(t);
+    const float* data = t->data;
+    float min_val = data[0], max_val = data[0];
+    double sum = 0.0;
+    for (size_t i = 0; i < count; i++) {
+        float val = data[i];
+        if (val < min_val) min_val = val;
+        if (val > max_val) max_val = val;
+        sum += val;
+    }
+    double mean = sum / (double)count;
+    uint32_t chk = checksum32_bytes(data, count * sizeof(float));
+    /* shape 출력: chk 비교 전에 양쪽이 같은 범위(같은 N,C,H,W)인지 확인용 */
+    printf("  %s: shape=(%d,%d,%d,%d) chk=0x%08X min=%.4f max=%.4f mean=%.4f\n",
+           name, t->n, t->c, t->h, t->w, (unsigned)chk, min_val, max_val, mean);
+    print_tensor_head(name, t, TENSOR_HEAD_BYTES);
+}
+
+/* 레이어별 통계 콜백 (UART/임베디드 검증용) */
+static void layer_stats_callback(int layer_idx, const tensor_t* t) {
+    char label[24];
+    snprintf(label, sizeof(label), "Layer %d", layer_idx);
+    print_tensor_stats_p(label, t);
+}
 
 // Helper function to save detections to a file
 static void save_detections_file(const char* filepath, const char* img_name,
@@ -67,8 +124,8 @@ void print_usage(const char* prog_name) {
     printf("Arguments:\n");
     printf("  image_name        Image name (without extension, e.g., 'bus')\n");
     printf("                    Input tensor will be loaded from: data/inputs/<image_name>.bin\n");
-    printf("  weights.bin       Model weights file (default: weights/yolov5n/weights_yolov5n.bin)\n");
-    printf("  model_meta.json   Model metadata (default: weights/yolov5n/model_meta_yolov5n.json)\n");
+    printf("  weights.bin       Model weights file (default: weights/yolov5n/weights_unfused.bin)\n");
+    printf("  model_meta.json   Model metadata (default: weights/yolov5n/model_meta_unfused.json)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s bus\n", prog_name);
@@ -175,10 +232,10 @@ int main(int argc, char* argv[]) {
         snprintf(weights_paths[1], sizeof(weights_paths[1]), "../%s", weights_path_arg);
         snprintf(weights_paths[2], sizeof(weights_paths[2]), "../../%s", weights_path_arg);
     } else {
-        // Default to YOLOv5n weights
-        snprintf(weights_paths[0], sizeof(weights_paths[0]), "weights/yolov5n/weights_yolov5n.bin");
-        snprintf(weights_paths[1], sizeof(weights_paths[1]), "../weights/yolov5n/weights_yolov5n.bin");
-        snprintf(weights_paths[2], sizeof(weights_paths[2]), "../../weights/yolov5n/weights_yolov5n.bin");
+        // Default to unfused weights (BN-separate format for embedded/Vitis compatibility)
+        snprintf(weights_paths[0], sizeof(weights_paths[0]), "weights/yolov5n/weights_unfused.bin");
+        snprintf(weights_paths[1], sizeof(weights_paths[1]), "../weights/yolov5n/weights_unfused.bin");
+        snprintf(weights_paths[2], sizeof(weights_paths[2]), "../../weights/yolov5n/weights_unfused.bin");
     }
     
     const char* found_weights_path = NULL;
@@ -210,10 +267,10 @@ int main(int argc, char* argv[]) {
         snprintf(meta_paths[1], sizeof(meta_paths[1]), "../%s", model_meta_path_arg);
         snprintf(meta_paths[2], sizeof(meta_paths[2]), "../../%s", model_meta_path_arg);
     } else {
-        // Default to YOLOv5n metadata
-        snprintf(meta_paths[0], sizeof(meta_paths[0]), "weights/yolov5n/model_meta_yolov5n.json");
-        snprintf(meta_paths[1], sizeof(meta_paths[1]), "../weights/yolov5n/model_meta_yolov5n.json");
-        snprintf(meta_paths[2], sizeof(meta_paths[2]), "../../weights/yolov5n/model_meta_yolov5n.json");
+        // Default to unfused metadata (matches weights_unfused.bin)
+        snprintf(meta_paths[0], sizeof(meta_paths[0]), "weights/yolov5n/model_meta_unfused.json");
+        snprintf(meta_paths[1], sizeof(meta_paths[1]), "../weights/yolov5n/model_meta_unfused.json");
+        snprintf(meta_paths[2], sizeof(meta_paths[2]), "../../weights/yolov5n/model_meta_unfused.json");
     }
     
     const char* found_meta_path = NULL;
@@ -314,9 +371,14 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Warning: Failed to set output directory: %s\n", output_dir);
     }
     
+    /* 레이어별 체크섬/통계 출력 (UART·임베디드와 비교용) */
+    yolov5n_set_layer_stats_callback(layer_stats_callback);
+    
     // Forward pass
     printf("\nRunning forward pass...\n");
-    fflush(stdout);  // Ensure output is flushed
+    printf("=== Layer stats (chk/min/max/mean) ===\n");
+    print_tensor_stats_p("input", input);
+    fflush(stdout);
     
     int ret = yolov5n_forward(model, input, outputs);
     if (ret != 0) {
@@ -336,7 +398,11 @@ int main(int argc, char* argv[]) {
     printf("P3 output: (%d, %d, %d, %d)\n", outputs[0]->n, outputs[0]->c, outputs[0]->h, outputs[0]->w);
     printf("P4 output: (%d, %d, %d, %d)\n", outputs[1]->n, outputs[1]->c, outputs[1]->h, outputs[1]->w);
     printf("P5 output: (%d, %d, %d, %d)\n", outputs[2]->n, outputs[2]->c, outputs[2]->h, outputs[2]->w);
-    
+    /* UART 검증용: platform_print_tensor_stats와 동일 형식 (임베디드 출력과 비교) */
+    print_tensor_stats_p("P3", outputs[0]);
+    print_tensor_stats_p("P4", outputs[1]);
+    print_tensor_stats_p("P5", outputs[2]);
+
     // Get P3, P4, P5 features for Detect head
     tensor_t* p3_feature = yolov5n_get_saved_feature(model, 17);
     tensor_t* p4_feature = yolov5n_get_saved_feature(model, 20);
@@ -450,21 +516,20 @@ int main(int argc, char* argv[]) {
     }
     printf("After NMS: %d detections\n", nms_count);
     
-    // Print results
+    // Print results (one compact block per detection)
     printf("\n=== Detection Results ===\n");
-    printf("Total detections: %d\n", nms_count);
-    printf("\n");
-    
-    // Print top 10 detections
+    printf("Total: %d\n\n", nms_count);
     int print_count = nms_count < 10 ? nms_count : 10;
     for (int i = 0; i < print_count; i++) {
         detection_t* det = &nms_detections[i];
-        printf("Detection %d:\n", i + 1);
-        printf("  Class ID: %d\n", det->cls_id);
-        printf("  Confidence: %.4f\n", det->conf);
-        printf("  BBox: (%.4f, %.4f, %.4f, %.4f)\n", det->x, det->y, det->w, det->h);
-        printf("  Pixel coords: x=%.1f, y=%.1f, w=%.1f, h=%.1f\n",
-               det->x * input_size, det->y * input_size, det->w * input_size, det->h * input_size);
+        float px = det->x * input_size;
+        float py = det->y * input_size;
+        float pw = det->w * input_size;
+        float ph = det->h * input_size;
+        printf("[%d] class=%d conf=%.4f  bbox=(%.4f,%.4f,%.4f,%.4f)  px=(%.1f,%.1f,%.1f,%.1f)\n",
+               i + 1, det->cls_id, det->conf, det->x, det->y, det->w, det->h, px, py, pw, ph);
+    }
+    if (nms_count > 0) {
         printf("\n");
     }
     

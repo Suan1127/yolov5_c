@@ -1,0 +1,9 @@
+# Normalize line endings to LF in repo (cross-platform C/Python)
+* text=auto eol=lf
+
+# Binary files: do not touch
+*.bin binary
+*.pt binary
+*.jpg binary
+*.png binary
+*.jpeg binary

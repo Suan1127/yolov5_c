@@ -337,8 +337,8 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
         goto error;
     }
     
-    if (conv2d_forward(&block->cv1, input, workspace1) != 0) {
-        fprintf(stderr, "Error: c3_forward: cv1 conv2d failed\n");
+    if (conv2d_fused_bn_silu_forward(&block->cv1, block->cv1_is_fused ? NULL : &block->cv1_bn, input, workspace1) != 0) {
+        fprintf(stderr, "Error: c3_forward: cv1 conv2d (fused) failed\n");
         fprintf(stderr, "  input: (%d, %d, %d, %d), workspace1: (%d, %d, %d, %d)\n",
                 input->n, input->c, input->h, input->w,
                 workspace1->n, workspace1->c, workspace1->h, workspace1->w);
@@ -346,14 +346,6 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
                 block->cv1.in_channels, block->cv1.params.out_channels);
         goto error;
     }
-    // Skip BN if fused
-    if (!block->cv1_is_fused) {
-        if (batchnorm2d_forward(&block->cv1_bn, workspace1, workspace1) != 0) {
-            fprintf(stderr, "Error: c3_forward: cv1 batchnorm failed\n");
-            goto error;
-        }
-    }
-    activation_silu(workspace1);
     
     // Debug: Save cv1 output (only if debug enabled)
     if (g_c3_debug_enabled) {
@@ -408,22 +400,11 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
         goto error;
     }
     
-    if (conv2d_forward(&block->cv2, input, skip_output) != 0) {
-        fprintf(stderr, "Error: c3_forward: cv2 conv2d failed\n");
+    if (conv2d_fused_bn_silu_forward(&block->cv2, block->cv2_is_fused ? NULL : &block->cv2_bn, input, skip_output) != 0) {
+        fprintf(stderr, "Error: c3_forward: cv2 conv2d (fused) failed\n");
         tensor_free(skip_output);
         goto error;
     }
-    
-    // Skip BN if fused
-    if (!block->cv2_is_fused) {
-        if (batchnorm2d_forward(&block->cv2_bn, skip_output, skip_output) != 0) {
-            fprintf(stderr, "Error: c3_forward: cv2 batchnorm failed\n");
-            tensor_free(skip_output);
-            goto error;
-        }
-    }
-    // Apply SiLU activation (cv2 has activation in YOLOv5)
-    activation_silu(skip_output);
     
     // Debug: Save cv2 output (only if debug enabled)
     if (g_c3_debug_enabled) {
@@ -471,8 +452,8 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
         goto error;
     }
     
-    if (conv2d_forward(&block->cv3, workspace2, output) != 0) {
-        fprintf(stderr, "Error: c3_forward: cv3 conv2d failed\n");
+    if (conv2d_fused_bn_silu_forward(&block->cv3, block->cv3_is_fused ? NULL : &block->cv3_bn, workspace2, output) != 0) {
+        fprintf(stderr, "Error: c3_forward: cv3 conv2d (fused) failed\n");
         fprintf(stderr, "  workspace2: (%d, %d, %d, %d)\n",
                 workspace2->n, workspace2->c, workspace2->h, workspace2->w);
         fprintf(stderr, "  output: (%d, %d, %d, %d)\n",
@@ -481,16 +462,6 @@ int c3_forward(c3_block_t* block, const tensor_t* input, tensor_t* output,
                 block->cv3.in_channels, block->cv3.params.out_channels);
         goto error;
     }
-    
-    // Skip BN if fused
-    if (!block->cv3_is_fused) {
-        if (batchnorm2d_forward(&block->cv3_bn, output, output) != 0) {
-            fprintf(stderr, "Error: c3_forward: cv3 batchnorm failed\n");
-            goto error;
-        }
-    }
-    
-    activation_silu(output);
     
     // Debug: Save final cv3 output (only if debug enabled)
     if (g_c3_debug_enabled) {

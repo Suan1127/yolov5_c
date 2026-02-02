@@ -256,9 +256,10 @@ YOLO_c/
 │
 ├── weights/                      # 모델 가중치
 │   ├── yolov5n/                  # YOLOv5n 가중치
-│   │   ├── weights_yolov5n.bin   # C용 바이너리 가중치
-│   │   ├── weights_map_yolov5n.json # 가중치 매핑
-│   │   └── model_meta_yolov5n.json # 모델 메타데이터
+│   │   ├── weights_unfused.bin   # C용 바이너리 가중치 (unfused, 기본)
+│   │   ├── weights_fused.bin     # C용 바이너리 가중치 (fused)
+│   │   ├── weights_map_*.json    # 가중치 매핑
+│   │   └── model_meta_*.json    # 모델 메타데이터
 │   └── yolov5s/                  # YOLOv5s 가중치 (선택사항)
 │       ├── weights_yolov5s.bin
 │       ├── weights_map_yolov5s.json
@@ -438,14 +439,15 @@ python tools/export_yolov5s.py yolov5n.pt --output weights/yolov5n/
 **처리 과정:**
 1. PyTorch 모델 로드
 2. 모든 레이어의 가중치 추출
-3. `weights_yolov5n.bin`: 바이너리 파일로 저장
-4. `weights_map_yolov5n.json`: 레이어별 오프셋 및 shape 정보
-5. `model_meta_yolov5n.json`: 모델 메타데이터 (입력 크기, 클래스 수 등)
+3. `weights_fused.bin` / `weights_unfused.bin`: 바이너리 파일로 저장
+4. `weights_map_fused.json` / `weights_map_unfused.json`: 레이어별 오프셋 및 shape 정보
+5. `model_meta_*.json`: 모델 메타데이터 (입력 크기, 클래스 수 등)
 
 **출력:**
-- `weights/yolov5n/weights_yolov5n.bin`: 모든 가중치 (단일 바이너리)
-- `weights/yolov5n/weights_map_yolov5n.json`: 가중치 매핑
-- `weights/yolov5n/model_meta_yolov5n.json`: 모델 메타데이터
+- `weights/yolov5n/weights_unfused.bin`: 모든 가중치 (unfused, 기본)
+- `weights/yolov5n/weights_fused.bin`: 모든 가중치 (fused)
+- `weights/yolov5n/weights_map_*.json`: 가중치 매핑
+- `weights/yolov5n/model_meta_*.json`: 모델 메타데이터
 
 ### 3. C 프로그램 실행
 

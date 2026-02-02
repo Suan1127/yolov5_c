@@ -179,9 +179,9 @@ static weight_map_t* parse_weights_map(const char* map_path) {
         return NULL;
     }
     
-    // Create weight map
+    // Create weight map (need 291+ for _vitis BN-separate format)
     weight_map_t* map = (weight_map_t*)calloc(1, sizeof(weight_map_t));
-    map->capacity = 256;
+    map->capacity = 512;
     map->entries = (weight_entry_t*)calloc(map->capacity, sizeof(weight_entry_t));
     
     // Root should be an object
@@ -353,7 +353,7 @@ weights_loader_t* weights_loader_create(const char* weights_path) {
     fclose(fp);
     
     // Try to find weights_map.json in same directory
-    // First try to extract model type from weights filename (e.g., weights_yolov5n.bin -> weights_map_yolov5n.json)
+    // First try to extract model type from weights filename (e.g., weights_fused.bin -> weights_map_fused.json)
     char map_path[1024];
     strncpy(map_path, weights_path, sizeof(map_path) - 1);
     char* last_slash = strrchr(map_path, '/');
@@ -361,7 +361,7 @@ weights_loader_t* weights_loader_create(const char* weights_path) {
     
     if (last_slash) {
         char* filename = last_slash + 1;
-        // Check if filename contains model type (e.g., weights_yolov5n.bin)
+        // Check if filename contains model type (e.g., weights_fused.bin)
         char* model_type_start = strstr(filename, "weights_");
         if (model_type_start) {
             // Extract model type (e.g., "yolov5n")

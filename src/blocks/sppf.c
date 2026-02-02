@@ -251,13 +251,8 @@ int sppf_forward(sppf_block_t* block, const tensor_t* input, tensor_t* output,
         need_free_ws3 = 1;
     }
     
-    // cv1: c1 -> c_
-    if (conv2d_forward(&block->cv1, input, workspace1) != 0) goto error;
-    // Skip BN if fused
-    if (!block->cv1_is_fused) {
-        if (batchnorm2d_forward(&block->cv1_bn, workspace1, workspace1) != 0) goto error;
-    }
-    activation_silu(workspace1);
+    // cv1: c1 -> c_ (fused Conv+BN+SiLU to reduce DDR traffic)
+    if (conv2d_fused_bn_silu_forward(&block->cv1, block->cv1_is_fused ? NULL : &block->cv1_bn, input, workspace1) != 0) goto error;
     
     // Debug: Save cv1 output (only if debug enabled)
     if (g_sppf_debug_enabled) {
@@ -366,25 +361,14 @@ int sppf_forward(sppf_block_t* block, const tensor_t* input, tensor_t* output,
         }
     }
     
-    // cv2: 4*c_ -> c2
-    if (conv2d_forward(&block->cv2, workspace3, output) != 0) {
+    // cv2: 4*c_ -> c2 (fused Conv+BN+SiLU to reduce DDR traffic)
+    if (conv2d_fused_bn_silu_forward(&block->cv2, block->cv2_is_fused ? NULL : &block->cv2_bn, workspace3, output) != 0) {
         tensor_free(x_copy);
         tensor_free(y1);
         tensor_free(y2);
         tensor_free(y4);
         goto error;
     }
-    // Skip BN if fused
-    if (!block->cv2_is_fused) {
-        if (batchnorm2d_forward(&block->cv2_bn, output, output) != 0) {
-            tensor_free(x_copy);
-            tensor_free(y1);
-            tensor_free(y2);
-            tensor_free(y4);
-            goto error;
-        }
-    }
-    activation_silu(output);
     
     // Debug: Save cv2 output
     if (g_sppf_debug_enabled) {

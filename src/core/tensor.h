@@ -28,6 +28,12 @@ typedef struct {
 tensor_t* tensor_create(int32_t n, int32_t c, int32_t h, int32_t w);
 
 /**
+ * Wrap an existing buffer as a tensor (no ownership; do not call tensor_free on it).
+ * Use for arena-backed workspace to avoid per-layer malloc/free.
+ */
+void tensor_wrap(tensor_t* t, float* data, int32_t n, int32_t c, int32_t h, int32_t w);
+
+/**
  * Free tensor memory
  */
 void tensor_free(tensor_t* t);

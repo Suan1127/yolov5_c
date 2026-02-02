@@ -112,46 +112,23 @@ int bottleneck_forward(bottleneck_t* block, const tensor_t* input, tensor_t* out
     
     // Memory relationship check removed - issue resolved
     
-    // Conv1 -> BN1 -> SiLU
-    // Debug output removed - issue resolved
-    if (conv2d_forward(&block->conv1, input, workspace) != 0) {
+    // Conv1 -> BN1 -> SiLU (fused to reduce DDR read/write)
+    if (conv2d_fused_bn_silu_forward(&block->conv1, block->conv1_is_fused ? NULL : &block->bn1, input, workspace) != 0) {
         if (need_free_workspace && workspace) tensor_free(workspace);
         return -1;
     }
     
-    // Skip BN if fused
-    if (!block->conv1_is_fused) {
-        if (batchnorm2d_forward(&block->bn1, workspace, workspace) != 0) {
-            if (need_free_workspace && workspace) tensor_free(workspace);
-            return -1;
-        }
-    }
-    activation_silu(workspace);
-    
-    // Conv2 -> BN2 -> SiLU
-    // Always need separate temp buffer for conv2 because workspace is used as input
-    // and we cannot write output to the same memory as input
+    // Conv2 -> BN2 -> SiLU (fused). Need separate temp: conv2 output cannot overwrite workspace (used as input).
     tensor_t* temp = tensor_create(input->n, block->c2, input->h, input->w);
     if (!temp) {
         if (need_free_workspace && workspace) tensor_free(workspace);
         return -1;
     }
-    
-    if (conv2d_forward(&block->conv2, workspace, temp) != 0) {
+    if (conv2d_fused_bn_silu_forward(&block->conv2, block->conv2_is_fused ? NULL : &block->bn2, workspace, temp) != 0) {
         tensor_free(temp);
         if (need_free_workspace && workspace) tensor_free(workspace);
         return -1;
     }
-    
-    // Skip BN if fused
-    if (!block->conv2_is_fused) {
-        if (batchnorm2d_forward(&block->bn2, temp, temp) != 0) {
-            tensor_free(temp);
-            if (need_free_workspace && workspace) tensor_free(workspace);
-            return -1;
-        }
-    }
-    activation_silu(temp);
     
     // Add shortcut if enabled
     if (block->shortcut) {
